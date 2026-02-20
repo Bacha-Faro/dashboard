@@ -854,6 +854,7 @@ function navTo(page, el) {
     auditoria:     () => renderAuditoria(mc),
     bachas:        () => renderBachas(mc),
     cadetes:       () => renderCadetes(mc),
+    temperatura:   () => renderTemperatura(mc),
   };
   if (pages[page]) pages[page]();
   else renderPlaceholder(mc, page);
@@ -2347,8 +2348,554 @@ async function confirmarNuevoCadete() {
 }
 
 // ══════════════════════════════════════════════
-//  INIT
+//  MÓDULO TEMPERATURA / HUMEDAD
 // ══════════════════════════════════════════════
+
+const HORARIOS = ['08:10', '12:00', '15:30', '18:50'];
+let SENSORES_DATA = [];
+let TEMP_LECTURAS = [];
+let TEMP_TAB = 'hoy';
+
+async function renderTemperatura(el) {
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;margin-bottom:2px">Temperatura / Humedad</h2>
+        <p style="color:var(--text3);font-family:var(--mono);font-size:11px">// CONTROL AMBIENTAL — 4 LECTURAS DIARIAS</p>
+      </div>
+      ${SESSION.rol !== 'solo_lectura' ? `<button class="btn btn-primary" onclick="abrirModalLectura()">+ Registrar Lectura</button>` : ''}
+    </div>
+
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin:16px -28px 0;padding:0 28px;">
+      <div class="b-tab active" id="ttab-hoy" onclick="switchTTab('hoy')">HOY</div>
+      <div class="b-tab" id="ttab-historial" onclick="switchTTab('historial')">HISTORIAL</div>
+      <div class="b-tab" id="ttab-grafico" onclick="switchTTab('grafico')">GRÁFICO</div>
+    </div>
+
+    <div id="tview-hoy" style="margin-top:20px"></div>
+    <div id="tview-historial" style="display:none;margin-top:20px"></div>
+    <div id="tview-grafico" style="display:none;margin-top:20px"></div>
+  `;
+
+  try {
+    [SENSORES_DATA, TEMP_LECTURAS] = await Promise.all([
+      sbGet('sensores', 'activo=eq.true&order=codigo.asc&select=id,codigo,nombre,ubicacion,temp_min,temp_max,hum_min,hum_max'),
+      sbGet('temperatura_lecturas', 'order=fecha.desc,horario.asc&limit=500&select=id,sensor_id,fecha,horario,temperatura,humedad,obs,creado_en'),
+    ]);
+    renderTHoy();
+  } catch(e) {
+    el.innerHTML += `<div style="color:var(--red);font-family:var(--mono);font-size:12px;margin-top:16px">Error: ${e.message}</div>`;
+  }
+}
+
+function switchTTab(tab) {
+  TEMP_TAB = tab;
+  ['hoy','historial','grafico'].forEach(t => {
+    document.getElementById(`ttab-${t}`)?.classList.toggle('active', t === tab);
+    const v = document.getElementById(`tview-${t}`);
+    if (v) v.style.display = t === tab ? 'block' : 'none';
+  });
+  if (tab === 'hoy') renderTHoy();
+  if (tab === 'historial') renderTHistorial();
+  if (tab === 'grafico') renderTGrafico();
+}
+
+// ── HOY ──
+function renderTHoy() {
+  const el = document.getElementById('tview-hoy');
+  if (!el) return;
+  const hoy = HOY();
+  const deHoy = TEMP_LECTURAS.filter(l => l.fecha === hoy);
+
+  // Alertas fuera de rango
+  const alertas = [];
+  deHoy.forEach(l => {
+    const s = SENSORES_DATA.find(x => x.id === l.sensor_id);
+    if (!s) return;
+    if (l.temperatura < s.temp_min || l.temperatura > s.temp_max) alertas.push(`${s.nombre} a las ${l.horario}: ${l.temperatura}°C (rango ${s.temp_min}–${s.temp_max}°C)`);
+    if (l.humedad && (l.humedad < s.hum_min || l.humedad > s.hum_max)) alertas.push(`${s.nombre} a las ${l.horario}: humedad ${l.humedad}% (rango ${s.hum_min}–${s.hum_max}%)`);
+  });
+
+  let html = '';
+
+  if (alertas.length) {
+    html += `<div style="background:rgba(255,71,87,.1);border:1px solid rgba(255,71,87,.3);border-radius:4px;padding:12px 16px;margin-bottom:16px">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--red);margin-bottom:6px">⚠ FUERA DE RANGO</div>
+      ${alertas.map(a => `<div style="font-size:12px;color:var(--red);margin-top:3px">• ${a}</div>`).join('')}
+    </div>`;
+  }
+
+  // Cards por sector
+  html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px">`;
+  SENSORES_DATA.forEach(s => {
+    const lecturas = deHoy.filter(l => l.sensor_id === s.id);
+    const ultima = lecturas[lecturas.length - 1] || null;
+    const fuera = ultima && (ultima.temperatura < s.temp_min || ultima.temperatura > s.temp_max);
+    const fueraHum = ultima && ultima.humedad && (ultima.humedad < s.hum_min || ultima.humedad > s.hum_max);
+    const color = fuera || fueraHum ? 'var(--red)' : 'var(--green)';
+    const borderColor = fuera || fueraHum ? 'rgba(255,71,87,.4)' : 'rgba(0,217,126,.2)';
+
+    html += `
+      <div style="background:var(--bg2);border:1px solid ${borderColor};border-radius:4px;padding:18px;border-left:3px solid ${color}">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div>
+            <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--text3)">${s.codigo}</div>
+            <div style="font-size:14px;font-weight:700;color:var(--text);margin-top:2px">${s.nombre}</div>
+            <div style="font-size:11px;color:var(--text3)">${s.ubicacion}</div>
+          </div>
+          <div style="width:10px;height:10px;border-radius:50%;background:${color};${fuera||fueraHum?'animation:bpulse 1.5s infinite':''}"></div>
+        </div>
+
+        ${ultima ? `
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+            <div style="background:var(--bg3);border-radius:4px;padding:10px;text-align:center">
+              <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:4px">TEMP</div>
+              <div style="font-size:22px;font-weight:700;color:${fuera?'var(--red)':'var(--accent)'}">${ultima.temperatura}°</div>
+              <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-top:2px">${s.temp_min}° – ${s.temp_max}°</div>
+            </div>
+            <div style="background:var(--bg3);border-radius:4px;padding:10px;text-align:center">
+              <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:4px">HUM</div>
+              <div style="font-size:22px;font-weight:700;color:${fueraHum?'var(--red)':'var(--text2)'}">${ultima.humedad || '—'}${ultima.humedad?'%':''}</div>
+              <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-top:2px">${s.hum_min}% – ${s.hum_max}%</div>
+            </div>
+          </div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--text3)">Última lectura: ${ultima.horario}</div>
+        ` : `<div style="font-family:var(--mono);font-size:11px;color:var(--text3);text-align:center;padding:16px 0">Sin lecturas hoy</div>`}
+
+        <!-- Horarios del día -->
+        <div style="display:flex;gap:6px;margin-top:10px">
+          ${HORARIOS.map(h => {
+            const lec = lecturas.find(l => l.horario === h);
+            return `<div style="flex:1;text-align:center;padding:5px 2px;border-radius:3px;background:${lec?'rgba(0,217,126,.12)':'var(--bg3)'};border:1px solid ${lec?'rgba(0,217,126,.25)':'var(--border)'}">
+              <div style="font-family:var(--mono);font-size:8px;color:${lec?'var(--green)':'var(--text3)'}">${h}</div>
+              ${lec ? `<div style="font-family:var(--mono);font-size:9px;color:var(--green);margin-top:1px">✓</div>` : `<div style="font-size:9px;color:var(--text3);margin-top:1px">—</div>`}
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  });
+  html += `</div>`;
+
+  // Tabla de lecturas del día
+  html += `
+    <div class="panel">
+      <div class="panel-header"><div class="panel-title">LECTURAS DE HOY — ${fmtDate(hoy)}</div></div>
+      ${deHoy.length ? `
+        <table class="data-table">
+          <thead><tr><th>Horario</th><th>Sector</th><th>Temperatura</th><th>Humedad</th><th>Estado</th><th>Obs</th></tr></thead>
+          <tbody>
+            ${deHoy.sort((a,b)=>a.horario.localeCompare(b.horario)).map(l => {
+              const s = SENSORES_DATA.find(x => x.id === l.sensor_id);
+              const fuera = s && (l.temperatura < s.temp_min || l.temperatura > s.temp_max);
+              const fueraH = s && l.humedad && (l.humedad < s.hum_min || l.humedad > s.hum_max);
+              return `<tr>
+                <td style="font-family:var(--mono);font-weight:600;color:var(--accent)">${l.horario}</td>
+                <td style="font-weight:500;color:var(--text)">${s ? s.nombre : '—'}</td>
+                <td style="font-family:var(--mono);color:${fuera?'var(--red)':'var(--text)'}">${l.temperatura}°C</td>
+                <td style="font-family:var(--mono);color:${fueraH?'var(--red)':'var(--text2)'}">${l.humedad ? l.humedad+'%' : '—'}</td>
+                <td>${fuera||fueraH ? '<span class="tag tag-red">⚠ Fuera de rango</span>' : '<span class="tag tag-green">✓ Normal</span>'}</td>
+                <td style="font-size:11px;color:var(--text3)">${l.obs || '—'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      ` : `<div style="padding:24px;text-align:center;color:var(--text3);font-family:var(--mono);font-size:11px">Sin lecturas registradas hoy</div>`}
+    </div>
+  `;
+
+  el.innerHTML = html;
+}
+
+// ── HISTORIAL ──
+async function renderTHistorial() {
+  const el = document.getElementById('tview-historial');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+      <select id="t-filter-sensor" onchange="filtrarTHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="">Todos los sectores</option>
+        ${SENSORES_DATA.map(s => `<option value="${s.id}">${s.nombre}</option>`).join('')}
+      </select>
+      <input type="date" id="t-filter-desde" onchange="filtrarTHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;" placeholder="Desde">
+      <input type="date" id="t-filter-hasta" onchange="filtrarTHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;" placeholder="Hasta">
+      <select id="t-filter-estado" onchange="filtrarTHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="">Todos</option>
+        <option value="normal">Normal</option>
+        <option value="alerta">Fuera de rango</option>
+      </select>
+      <button class="btn btn-outline btn-sm" onclick="exportarTempCSV()">⬇ Exportar</button>
+    </div>
+    <div class="panel">
+      <table class="data-table">
+        <thead><tr><th>Fecha</th><th>Horario</th><th>Sector</th><th>Temperatura</th><th>Humedad</th><th>Estado</th><th>Obs</th></tr></thead>
+        <tbody id="t-hist-tbody"></tbody>
+      </table>
+    </div>
+  `;
+
+  window._tempRows = TEMP_LECTURAS;
+  filtrarTHistorial();
+}
+
+function filtrarTHistorial() {
+  const rows = window._tempRows || TEMP_LECTURAS;
+  const fSensor = document.getElementById('t-filter-sensor')?.value || '';
+  const fDesde = document.getElementById('t-filter-desde')?.value || '';
+  const fHasta = document.getElementById('t-filter-hasta')?.value || '';
+  const fEstado = document.getElementById('t-filter-estado')?.value || '';
+  const tbody = document.getElementById('t-hist-tbody');
+  if (!tbody) return;
+
+  const filtered = rows.filter(l => {
+    if (fSensor && l.sensor_id !== fSensor) return false;
+    if (fDesde && l.fecha < fDesde) return false;
+    if (fHasta && l.fecha > fHasta) return false;
+    if (fEstado) {
+      const s = SENSORES_DATA.find(x => x.id === l.sensor_id);
+      const fuera = s && (l.temperatura < s.temp_min || l.temperatura > s.temp_max || (l.humedad && (l.humedad < s.hum_min || l.humedad > s.hum_max)));
+      if (fEstado === 'normal' && fuera) return false;
+      if (fEstado === 'alerta' && !fuera) return false;
+    }
+    return true;
+  });
+
+  tbody.innerHTML = filtered.length ? filtered.map(l => {
+    const s = SENSORES_DATA.find(x => x.id === l.sensor_id);
+    const fuera = s && (l.temperatura < s.temp_min || l.temperatura > s.temp_max);
+    const fueraH = s && l.humedad && (l.humedad < s.hum_min || l.humedad > s.hum_max);
+    return `<tr>
+      <td style="font-family:var(--mono);font-size:11px">${fmtDate(l.fecha)}</td>
+      <td style="font-family:var(--mono);font-weight:600;color:var(--accent)">${l.horario}</td>
+      <td style="font-weight:500;color:var(--text)">${s ? s.nombre : '—'}</td>
+      <td style="font-family:var(--mono);color:${fuera?'var(--red)':'var(--text)'}">${l.temperatura}°C</td>
+      <td style="font-family:var(--mono);color:${fueraH?'var(--red)':'var(--text2)'}">${l.humedad ? l.humedad+'%' : '—'}</td>
+      <td>${fuera||fueraH ? '<span class="tag tag-red">⚠ Alerta</span>' : '<span class="tag tag-green">✓ Normal</span>'}</td>
+      <td style="font-size:11px;color:var(--text3)">${l.obs || '—'}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text3);font-family:var(--mono);font-size:11px">Sin registros</td></tr>`;
+}
+
+function exportarTempCSV() {
+  const rows = window._tempRows || TEMP_LECTURAS;
+  let csv = 'Fecha,Horario,Sector,Temperatura,Humedad,Estado,Obs\n';
+  rows.forEach(l => {
+    const s = SENSORES_DATA.find(x => x.id === l.sensor_id);
+    const fuera = s && (l.temperatura < s.temp_min || l.temperatura > s.temp_max || (l.humedad && (l.humedad < s.hum_min || l.humedad > s.hum_max)));
+    csv += `${l.fecha},${l.horario},"${s?s.nombre:''}",${l.temperatura},${l.humedad||''},${fuera?'ALERTA':'NORMAL'},"${l.obs||''}"\n`;
+  });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `temperatura_${HOY()}.csv`;
+  a.click();
+}
+
+// ── GRÁFICO ──
+function renderTGrafico() {
+  const el = document.getElementById('tview-grafico');
+  if (!el) return;
+
+  // Últimos 7 días
+  const hace7 = new Date(); hace7.setDate(hace7.getDate()-6);
+  const desde7 = hace7.toISOString().split('T')[0];
+  const recientes = TEMP_LECTURAS.filter(l => l.fecha >= desde7);
+
+  el.innerHTML = `
+    <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
+      <select id="g-sensor" onchange="actualizarGrafico()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        ${SENSORES_DATA.map(s => `<option value="${s.id}">${s.nombre}</option>`).join('')}
+      </select>
+      <select id="g-param" onchange="actualizarGrafico()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="temperatura">Temperatura</option>
+        <option value="humedad">Humedad</option>
+      </select>
+      <select id="g-dias" onchange="actualizarGrafico()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="7">Últimos 7 días</option>
+        <option value="14">Últimos 14 días</option>
+        <option value="30">Últimos 30 días</option>
+      </select>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><div class="panel-title" id="g-titulo">TEMPERATURA — SECTOR A</div></div>
+      <div class="panel-body">
+        <canvas id="g-canvas" style="width:100%;height:300px"></canvas>
+        <div id="g-empty" style="display:none;text-align:center;padding:48px;color:var(--text3);font-family:var(--mono);font-size:11px">Sin datos suficientes para mostrar el gráfico</div>
+      </div>
+    </div>
+  `;
+
+  actualizarGrafico();
+}
+
+function actualizarGrafico() {
+  const sensorId = document.getElementById('g-sensor')?.value;
+  const param = document.getElementById('g-param')?.value || 'temperatura';
+  const dias = parseInt(document.getElementById('g-dias')?.value || '7');
+  const canvas = document.getElementById('g-canvas');
+  if (!canvas) return;
+
+  const desde = new Date(); desde.setDate(desde.getDate() - (dias-1));
+  const desdeStr = desde.toISOString().split('T')[0];
+
+  const sensor = SENSORES_DATA.find(s => s.id === sensorId);
+  const rows = TEMP_LECTURAS.filter(l => l.sensor_id === sensorId && l.fecha >= desdeStr);
+
+  const titulo = document.getElementById('g-titulo');
+  if (titulo && sensor) titulo.textContent = `${param === 'temperatura' ? 'TEMPERATURA' : 'HUMEDAD'} — ${sensor.nombre.toUpperCase()}`;
+
+  if (!rows.length) {
+    canvas.style.display = 'none';
+    document.getElementById('g-empty').style.display = 'block';
+    return;
+  }
+
+  canvas.style.display = 'block';
+  document.getElementById('g-empty').style.display = 'none';
+
+  // Preparar datos
+  const puntos = rows.map(l => ({
+    label: `${fmtDate(l.fecha)} ${l.horario}`,
+    valor: param === 'temperatura' ? l.temperatura : l.humedad,
+    fuera: param === 'temperatura'
+      ? (sensor && (l.temperatura < sensor.temp_min || l.temperatura > sensor.temp_max))
+      : (sensor && l.humedad && (l.humedad < sensor.hum_min || l.humedad > sensor.hum_max))
+  })).filter(p => p.valor !== null);
+
+  const min = param === 'temperatura' ? sensor?.temp_min : sensor?.hum_min;
+  const max = param === 'temperatura' ? sensor?.temp_max : sensor?.hum_max;
+  const unidad = param === 'temperatura' ? '°C' : '%';
+
+  // Dibujar con Canvas nativo
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 800;
+  const H = 300;
+  canvas.width = W;
+  canvas.height = H;
+
+  const pad = { top: 20, right: 20, bottom: 60, left: 50 };
+  const gW = W - pad.left - pad.right;
+  const gH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Fondo
+  ctx.fillStyle = '#1a2230';
+  ctx.fillRect(0, 0, W, H);
+
+  if (!puntos.length) return;
+
+  const valores = puntos.map(p => p.valor);
+  const minVal = Math.min(...valores, min || 0) - 2;
+  const maxVal = Math.max(...valores, max || 0) + 2;
+  const rango = maxVal - minVal || 1;
+
+  const xStep = gW / (puntos.length - 1 || 1);
+  const toX = i => pad.left + i * xStep;
+  const toY = v => pad.top + gH - ((v - minVal) / rango) * gH;
+
+  // Grid lines
+  ctx.strokeStyle = '#1e2d3d';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.top + (gH / 5) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + gW, y); ctx.stroke();
+    const val = maxVal - (rango / 5) * i;
+    ctx.fillStyle = '#3d5470';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(val.toFixed(1) + unidad, pad.left - 6, y + 4);
+  }
+
+  // Zona rango permitido
+  if (min !== undefined && max !== undefined) {
+    ctx.fillStyle = 'rgba(0,217,126,0.06)';
+    ctx.fillRect(pad.left, toY(max), gW, toY(min) - toY(max));
+    // Líneas de rango
+    ctx.strokeStyle = 'rgba(0,217,126,0.3)';
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad.left, toY(min)); ctx.lineTo(pad.left+gW, toY(min)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad.left, toY(max)); ctx.lineTo(pad.left+gW, toY(max)); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Línea principal
+  ctx.strokeStyle = '#00c2ff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  puntos.forEach((p, i) => {
+    const x = toX(i), y = toY(p.valor);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Área bajo la línea
+  ctx.beginPath();
+  puntos.forEach((p, i) => {
+    const x = toX(i), y = toY(p.valor);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.lineTo(toX(puntos.length-1), pad.top+gH);
+  ctx.lineTo(pad.left, pad.top+gH);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0,194,255,0.06)';
+  ctx.fill();
+
+  // Puntos
+  puntos.forEach((p, i) => {
+    const x = toX(i), y = toY(p.valor);
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI*2);
+    ctx.fillStyle = p.fuera ? '#ff4757' : '#00c2ff';
+    ctx.fill();
+  });
+
+  // Labels eje X (cada N puntos para no saturar)
+  const step = Math.ceil(puntos.length / 8);
+  ctx.fillStyle = '#3d5470';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  puntos.forEach((p, i) => {
+    if (i % step === 0 || i === puntos.length-1) {
+      ctx.fillText(p.label.split(' ')[0], toX(i), H - pad.bottom + 16);
+      ctx.fillText(p.label.split(' ')[1] || '', toX(i), H - pad.bottom + 28);
+    }
+  });
+
+  // Leyenda
+  ctx.fillStyle = 'rgba(0,217,126,0.6)';
+  ctx.fillRect(pad.left, H - 16, 12, 8);
+  ctx.fillStyle = '#3d5470';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('Rango permitido', pad.left + 16, H - 10);
+}
+
+// ── MODAL LECTURA ──
+function abrirModalLectura() {
+  let m = document.getElementById('modal-lectura');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal-lectura';
+    m.className = 'modal-overlay';
+    m.innerHTML = `
+      <div class="modal" style="max-width:500px">
+        <div class="modal-header">
+          <div class="modal-title">🌡️ Registrar Lectura</div>
+          <div class="modal-close" onclick="document.getElementById('modal-lectura').classList.remove('open')">✕</div>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Fecha *</label>
+              <input type="date" class="form-input" id="tl-fecha">
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">Horario *</label>
+              <select class="form-select" id="tl-horario">
+                ${HORARIOS.map(h => `<option value="${h}">${h}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--text3);text-transform:uppercase;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border)">// VALORES POR SECTOR</div>
+          ${SENSORES_DATA.map(s => `
+            <div style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:14px;margin-bottom:10px">
+              <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--accent);margin-bottom:10px">${s.nombre} <span style="color:var(--text3);font-weight:400">— ${s.ubicacion}</span></div>
+              <div class="form-row" style="margin-bottom:0">
+                <div class="form-group-inner">
+                  <label class="form-label-inner">Temperatura °C *</label>
+                  <input type="number" step="0.1" class="form-input" id="tl-temp-${s.id}" placeholder="${s.temp_min}–${s.temp_max}°C">
+                </div>
+                <div class="form-group-inner">
+                  <label class="form-label-inner">Humedad %</label>
+                  <input type="number" step="0.1" class="form-input" id="tl-hum-${s.id}" placeholder="${s.hum_min}–${s.hum_max}%">
+                </div>
+              </div>
+            </div>
+          `).join('')}
+          <div class="form-row single" style="margin-bottom:0;margin-top:4px">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Observaciones generales</label>
+              <input type="text" class="form-input" id="tl-obs" placeholder="Opcional">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="document.getElementById('modal-lectura').classList.remove('open')">Cancelar</button>
+          <button class="btn btn-primary" onclick="confirmarLectura()">Guardar Lecturas →</button>
+        </div>
+      </div>`;
+    m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+    document.body.appendChild(m);
+  }
+
+  document.getElementById('tl-fecha').value = HOY();
+  // Seleccionar horario más cercano al actual
+  const now = new Date();
+  const horaActual = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  const closest = HORARIOS.reduce((prev, curr) => Math.abs(curr.localeCompare(horaActual)) < Math.abs(prev.localeCompare(horaActual)) ? curr : prev);
+  document.getElementById('tl-horario').value = closest;
+  SENSORES_DATA.forEach(s => {
+    document.getElementById(`tl-temp-${s.id}`).value = '';
+    const hEl = document.getElementById(`tl-hum-${s.id}`);
+    if (hEl) hEl.value = '';
+  });
+  document.getElementById('tl-obs').value = '';
+  m.classList.add('open');
+}
+
+async function confirmarLectura() {
+  const fecha = document.getElementById('tl-fecha').value;
+  const horario = document.getElementById('tl-horario').value;
+  const obs = document.getElementById('tl-obs').value.trim() || null;
+
+  if (!fecha || !horario) { toast('⚠ Fecha y horario son obligatorios', 'warn'); return; }
+
+  // Validar que al menos un sensor tenga temperatura
+  const registros = [];
+  for (const s of SENSORES_DATA) {
+    const tempEl = document.getElementById(`tl-temp-${s.id}`);
+    const humEl = document.getElementById(`tl-hum-${s.id}`);
+    const temp = tempEl?.value;
+    const hum = humEl?.value;
+    if (!temp) { toast(`⚠ Ingresá la temperatura del ${s.nombre}`, 'warn'); return; }
+    registros.push({ sensor_id: s.id, fecha, horario, temperatura: parseFloat(temp), humedad: hum ? parseFloat(hum) : null, obs, registrado_por: SESSION.id });
+  }
+
+  try {
+    // Verificar si ya existen lecturas para este horario
+    const existentes = TEMP_LECTURAS.filter(l => l.fecha === fecha && l.horario === horario);
+    if (existentes.length > 0) {
+      if (!confirm(`Ya hay lecturas registradas para el ${fmtDate(fecha)} a las ${horario}. ¿Reemplazar?`)) return;
+      // Borrar existentes
+      for (const e of existentes) {
+        await fetch(`${SB_URL}/rest/v1/temperatura_lecturas?id=eq.${e.id}`, { method: 'DELETE', headers: sbHeaders });
+      }
+    }
+
+    for (const r of registros) await sbPost('temperatura_lecturas', r);
+
+    await sbPost('auditoria', {
+      usuario_id: SESSION.id, username: SESSION.username,
+      accion: 'LECTURA_TEMPERATURA', modulo: 'TEMPERATURA',
+      detalle: { fecha, horario, sectores: registros.length }
+    });
+
+    document.getElementById('modal-lectura').classList.remove('open');
+    toast('✓ Lecturas guardadas correctamente', 'ok');
+
+    // Recargar
+    TEMP_LECTURAS = await sbGet('temperatura_lecturas', 'order=fecha.desc,horario.asc&limit=500&select=id,sensor_id,fecha,horario,temperatura,humedad,obs,creado_en');
+    if (TEMP_TAB === 'hoy') renderTHoy();
+    if (TEMP_TAB === 'historial') { window._tempRows = TEMP_LECTURAS; filtrarTHistorial(); }
+    if (TEMP_TAB === 'grafico') actualizarGrafico();
+
+  } catch(e) {
+    toast(`⚠ Error: ${e.message}`, 'error');
+  }
+}
 window.addEventListener('DOMContentLoaded', () => {
   const s = loadSession();
   if (s) { SESSION = s; mostrarApp(); }
