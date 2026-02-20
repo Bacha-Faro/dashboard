@@ -849,12 +849,13 @@ function navTo(page, el) {
   if (el) el.classList.add('active');
   const mc = document.getElementById('main-content');
   const pages = {
-    dashboard:     () => renderDashboard(mc),
-    usuarios:      () => renderUsuarios(mc),
-    auditoria:     () => renderAuditoria(mc),
-    bachas:        () => renderBachas(mc),
-    cadetes:       () => renderCadetes(mc),
-    temperatura:   () => renderTemperatura(mc),
+    dashboard:      () => renderDashboard(mc),
+    usuarios:       () => renderUsuarios(mc),
+    auditoria:      () => renderAuditoria(mc),
+    bachas:         () => renderBachas(mc),
+    cadetes:        () => renderCadetes(mc),
+    temperatura:    () => renderTemperatura(mc),
+    comisionistas:  () => renderComisionistas(mc),
   };
   if (pages[page]) pages[page]();
   else renderPlaceholder(mc, page);
@@ -2896,6 +2897,458 @@ async function confirmarLectura() {
     toast(`⚠ Error: ${e.message}`, 'error');
   }
 }
+
+// ══════════════════════════════════════════════
+//  MÓDULO COMISIONISTAS
+// ══════════════════════════════════════════════
+
+let COMISIONISTAS_DATA = [];
+let COM_VIAJES_DATA = [];
+let COM_BULTOS_DATA = [];
+let COM_TAB = 'movimientos';
+
+async function renderComisionistas(el) {
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;margin-bottom:2px">Comisionistas</h2>
+        <p style="color:var(--text3);font-family:var(--mono);font-size:11px">// TRAZABILIDAD DE BULTOS — ZONA</p>
+      </div>
+      <div style="display:flex;gap:10px">
+        ${SESSION.rol !== 'solo_lectura' ? `
+          <button class="btn btn-outline" onclick="switchCOMTab('liquidacion')">💰 Liquidación</button>
+          <button class="btn btn-primary" onclick="abrirModalNuevoViaje()">+ Registrar Movimiento</button>
+        ` : ''}
+      </div>
+    </div>
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin:16px -28px 0;padding:0 28px;">
+      <div class="b-tab active" id="comtab-movimientos" onclick="switchCOMTab('movimientos')">MOVIMIENTOS HOY</div>
+      <div class="b-tab" id="comtab-historial" onclick="switchCOMTab('historial')">HISTORIAL</div>
+      <div class="b-tab" id="comtab-liquidacion" onclick="switchCOMTab('liquidacion')">LIQUIDACIÓN</div>
+      <div class="b-tab" id="comtab-config" onclick="switchCOMTab('config')">TARIFAS</div>
+    </div>
+    <div class="kpi-grid" style="margin-top:20px">
+      <div class="kpi-card blue"><div class="kpi-label">// VIAJES HOY</div><div class="kpi-value" id="comkpi-hoy">…</div><div class="kpi-sub">registrados</div></div>
+      <div class="kpi-card yellow"><div class="kpi-label">// BULTOS SALIDA</div><div class="kpi-value" id="comkpi-sal">…</div><div class="kpi-sub">enviados hoy</div></div>
+      <div class="kpi-card green"><div class="kpi-label">// BULTOS ENTRADA</div><div class="kpi-value" id="comkpi-ent">…</div><div class="kpi-sub">recibidos hoy</div></div>
+      <div class="kpi-card red"><div class="kpi-label">// EN TRÁNSITO</div><div class="kpi-value" id="comkpi-trans">…</div><div class="kpi-sub">sin confirmar</div></div>
+    </div>
+    <div id="comview-movimientos"></div>
+    <div id="comview-historial" style="display:none"></div>
+    <div id="comview-liquidacion" style="display:none"></div>
+    <div id="comview-config" style="display:none"></div>
+  `;
+  try {
+    [COMISIONISTAS_DATA, COM_VIAJES_DATA, COM_BULTOS_DATA] = await Promise.all([
+      sbGet('comisionistas', 'activo=eq.true&order=nombre.asc&select=id,nombre,ruta,tarifa_actual'),
+      sbGet('comisionistas_viajes', 'order=fecha.desc&limit=300&select=id,comisionista_id,fecha,estado,obs,creado_en'),
+      sbGet('comisionistas_bultos', 'select=id,viaje_id,destino_id,tipo,cantidad,contenido,retornado'),
+    ]);
+    renderCOMKpis();
+    renderCOMMovimientos();
+  } catch(e) {
+    el.innerHTML += `<div style="color:var(--red);font-family:var(--mono);font-size:12px;margin-top:16px">Error: ${e.message}</div>`;
+  }
+}
+
+function switchCOMTab(tab) {
+  COM_TAB = tab;
+  ['movimientos','historial','liquidacion','config'].forEach(t => {
+    document.getElementById(`comtab-${t}`)?.classList.toggle('active', t === tab);
+    const v = document.getElementById(`comview-${t}`);
+    if (v) v.style.display = t === tab ? 'block' : 'none';
+  });
+  if (tab === 'movimientos') renderCOMMovimientos();
+  if (tab === 'historial') renderCOMHistorial();
+  if (tab === 'liquidacion') renderCOMLiquidacion();
+  if (tab === 'config') renderCOMConfig();
+}
+
+function renderCOMKpis() {
+  const hoy = HOY();
+  const viajesHoy = COM_VIAJES_DATA.filter(v => v.fecha === hoy);
+  const bultosHoy = COM_BULTOS_DATA.filter(b => viajesHoy.some(v => v.id === b.viaje_id));
+  const salHoy = bultosHoy.filter(b => b.tipo === 'ENVIO').reduce((a,b) => a+(b.cantidad||1), 0);
+  const entHoy = bultosHoy.filter(b => b.tipo === 'RETORNO').reduce((a,b) => a+(b.cantidad||1), 0);
+  const transito = COM_VIAJES_DATA.filter(v => v.estado === 'EN_RUTA').length;
+  document.getElementById('comkpi-hoy').textContent = viajesHoy.length;
+  document.getElementById('comkpi-sal').textContent = salHoy;
+  document.getElementById('comkpi-ent').textContent = entHoy;
+  document.getElementById('comkpi-trans').textContent = transito;
+  if (transito > 0) document.getElementById('comkpi-trans').style.color = 'var(--yellow)';
+}
+
+function renderCOMMovimientos() {
+  const el = document.getElementById('comview-movimientos');
+  if (!el) return;
+  const hoy = HOY();
+  const viajesHoy = COM_VIAJES_DATA.filter(v => v.fecha === hoy);
+  if (!viajesHoy.length) {
+    el.innerHTML = `<div style="text-align:center;padding:48px;color:var(--text3);font-family:var(--mono);font-size:12px">SIN MOVIMIENTOS HOY</div>`;
+    return;
+  }
+  const estadoTag = { EN_RUTA:'<span class="tag tag-yellow">En ruta</span>', COMPLETADO:'<span class="tag tag-green">Completado</span>', PARCIAL:'<span class="tag tag-blue">Parcial</span>' };
+  el.innerHTML = viajesHoy.map(v => {
+    const com = COMISIONISTAS_DATA.find(c => c.id === v.comisionista_id);
+    const bultos = COM_BULTOS_DATA.filter(b => b.viaje_id === v.id);
+    const envios = bultos.filter(b => b.tipo === 'ENVIO');
+    const retornos = bultos.filter(b => b.tipo === 'RETORNO');
+    const totalB = bultos.reduce((a,b) => a+(b.cantidad||1), 0);
+    return `<div class="panel" style="margin-top:12px">
+      <div class="panel-header">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div class="panel-title">${com ? com.nombre : '—'}</div>
+          ${estadoTag[v.estado]||''}
+          <div style="font-family:var(--mono);font-size:10px;color:var(--text3)">${totalB} bultos</div>
+        </div>
+        ${SESSION.rol !== 'solo_lectura' && v.estado === 'EN_RUTA' ? `<button class="btn btn-success btn-sm" onclick="marcarCompletado('${v.id}')">✓ Completar</button>` : ''}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0">
+        <div style="border-right:1px solid var(--border);padding:14px">
+          <div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--yellow);margin-bottom:10px">📤 ENVÍOS (${envios.reduce((a,b)=>a+(b.cantidad||1),0)} bultos)</div>
+          ${envios.length ? envios.map(b => `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+            <div style="font-weight:500;color:var(--text)">${b.destino_id ? destNombre(b.destino_id) : '—'}</div>
+            <div style="font-family:var(--mono);font-size:10px;color:var(--text3)">${b.cantidad} bulto${b.cantidad!==1?'s':''} ${b.contenido?'— '+b.contenido:''}</div>
+          </div>`).join('') : `<div style="color:var(--text3);font-family:var(--mono);font-size:11px">Sin envíos</div>`}
+        </div>
+        <div style="padding:14px">
+          <div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--green);margin-bottom:10px">📥 RETORNOS (${retornos.reduce((a,b)=>a+(b.cantidad||1),0)} bultos)</div>
+          ${retornos.length ? retornos.map(b => `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+            <div style="font-weight:500;color:var(--text)">${b.destino_id ? destNombre(b.destino_id) : 'Para droguería'}</div>
+            <div style="font-family:var(--mono);font-size:10px;color:var(--text3)">${b.cantidad} bulto${b.cantidad!==1?'s':''} ${b.contenido?'— '+b.contenido:''}${b.destino_id?' <span style="color:var(--yellow)">· Redistribuir a RC</span>':''}</div>
+          </div>`).join('') : `<div style="color:var(--text3);font-family:var(--mono);font-size:11px">Sin retornos</div>`}
+        </div>
+      </div>
+      ${v.obs ? `<div style="padding:10px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--text3)">📝 ${v.obs}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderCOMHistorial() {
+  const el = document.getElementById('comview-historial');
+  if (!el) return;
+  el.innerHTML = `
+    <div style="display:flex;gap:10px;margin:12px 0;flex-wrap:wrap">
+      <select id="com-filter-com" onchange="filtrarCOMHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="">Todos los comisionistas</option>
+        ${COMISIONISTAS_DATA.map(c => `<option value="${c.id}">${c.nombre}</option>`).join('')}
+      </select>
+      <input type="date" id="com-filter-desde" onchange="filtrarCOMHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+      <input type="date" id="com-filter-hasta" onchange="filtrarCOMHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+      <button class="btn btn-outline btn-sm" onclick="exportarCOMCSV()">⬇ Exportar</button>
+    </div>
+    <div class="panel">
+      <table class="data-table">
+        <thead><tr><th>Fecha</th><th>Comisionista</th><th>Bultos envío</th><th>Bultos retorno</th><th>Estado</th><th>Obs</th></tr></thead>
+        <tbody id="com-hist-tbody"></tbody>
+      </table>
+    </div>`;
+  filtrarCOMHistorial();
+}
+
+function filtrarCOMHistorial() {
+  const fCom = document.getElementById('com-filter-com')?.value||'';
+  const fDesde = document.getElementById('com-filter-desde')?.value||'';
+  const fHasta = document.getElementById('com-filter-hasta')?.value||'';
+  const tbody = document.getElementById('com-hist-tbody');
+  if (!tbody) return;
+  const estadoTag = { EN_RUTA:'<span class="tag tag-yellow">En ruta</span>', COMPLETADO:'<span class="tag tag-green">✓ Completado</span>', PARCIAL:'<span class="tag tag-blue">Parcial</span>' };
+  const filtered = COM_VIAJES_DATA.filter(v => {
+    if (fCom && v.comisionista_id !== fCom) return false;
+    if (fDesde && v.fecha < fDesde) return false;
+    if (fHasta && v.fecha > fHasta) return false;
+    return true;
+  });
+  tbody.innerHTML = filtered.length ? filtered.map(v => {
+    const com = COMISIONISTAS_DATA.find(c => c.id === v.comisionista_id);
+    const bs = COM_BULTOS_DATA.filter(b => b.viaje_id === v.id);
+    const env = bs.filter(b=>b.tipo==='ENVIO').reduce((a,b)=>a+(b.cantidad||1),0);
+    const ret = bs.filter(b=>b.tipo==='RETORNO').reduce((a,b)=>a+(b.cantidad||1),0);
+    return `<tr>
+      <td style="font-family:var(--mono);font-size:11px">${fmtDate(v.fecha)}</td>
+      <td style="font-weight:500;color:var(--text)">${com?com.nombre:'—'}</td>
+      <td style="font-family:var(--mono);color:var(--yellow)">${env}</td>
+      <td style="font-family:var(--mono);color:var(--green)">${ret}</td>
+      <td>${estadoTag[v.estado]||v.estado}</td>
+      <td style="font-size:11px;color:var(--text3)">${v.obs||'—'}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text3);font-family:var(--mono);font-size:11px">Sin registros</td></tr>`;
+}
+
+function exportarCOMCSV() {
+  let csv = 'Fecha,Comisionista,Bultos Envío,Bultos Retorno,Estado\n';
+  COM_VIAJES_DATA.forEach(v => {
+    const com = COMISIONISTAS_DATA.find(c => c.id === v.comisionista_id);
+    const bs = COM_BULTOS_DATA.filter(b => b.viaje_id === v.id);
+    const env = bs.filter(b=>b.tipo==='ENVIO').reduce((a,b)=>a+(b.cantidad||1),0);
+    const ret = bs.filter(b=>b.tipo==='RETORNO').reduce((a,b)=>a+(b.cantidad||1),0);
+    csv += `${v.fecha},"${com?com.nombre:''}",${env},${ret},${v.estado}\n`;
+  });
+  const blob = new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `comisionistas_${HOY()}.csv`; a.click();
+}
+
+function renderCOMLiquidacion() {
+  const el = document.getElementById('comview-liquidacion');
+  if (!el) return;
+  const ahora = new Date();
+  el.innerHTML = `
+    <div style="display:flex;gap:10px;margin:12px 0;align-items:center;flex-wrap:wrap">
+      <select id="liq-mes" onchange="calcularLiquidacion()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        ${Array.from({length:12},(_,i)=>{
+          const d = new Date(ahora.getFullYear(), ahora.getMonth()-i, 1);
+          const val = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+          const label = d.toLocaleDateString('es-AR',{month:'long',year:'numeric'}).toUpperCase();
+          return '<option value="'+val+'">'+label+'</option>';
+        }).join('')}
+      </select>
+      <select id="liq-com" onchange="calcularLiquidacion()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="">Todos los comisionistas</option>
+        ${COMISIONISTAS_DATA.map(c=>'<option value="'+c.id+'">'+c.nombre+'</option>').join('')}
+      </select>
+    </div>
+    <div id="liq-resultado"></div>`;
+  calcularLiquidacion();
+}
+
+function calcularLiquidacion() {
+  const mes = document.getElementById('liq-mes')?.value||'';
+  const comFiltro = document.getElementById('liq-com')?.value||'';
+  const el = document.getElementById('liq-resultado');
+  if (!el||!mes) return;
+  const parts = mes.split('-');
+  const año = parts[0]; const mesNum = parts[1];
+  const desde = año+'-'+mesNum+'-01';
+  const hasta = new Date(parseInt(año), parseInt(mesNum), 0).toISOString().split('T')[0];
+  const lista = comFiltro ? COMISIONISTAS_DATA.filter(c=>c.id===comFiltro) : COMISIONISTAS_DATA;
+  const mesLabel = new Date(parseInt(año), parseInt(mesNum)-1, 1).toLocaleDateString('es-AR',{month:'long',year:'numeric'}).toUpperCase();
+  const rows = lista.map(c => {
+    const viajes = COM_VIAJES_DATA.filter(v=>v.comisionista_id===c.id && v.fecha>=desde && v.fecha<=hasta);
+    const bs = COM_BULTOS_DATA.filter(b=>viajes.some(v=>v.id===b.viaje_id));
+    const totalB = bs.reduce((a,b)=>a+(b.cantidad||1),0);
+    const tarifa = parseFloat(c.tarifa_actual)||0;
+    return { c, nViajes:viajes.length, totalB, tarifa, total:totalB*tarifa };
+  });
+  const granTotal = rows.reduce((a,r)=>a+r.total,0);
+  el.innerHTML = `
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">LIQUIDACIÓN — ${mesLabel}</div>
+        <button class="btn btn-outline btn-sm" onclick="imprimirLiquidacion('${mes}','${mesLabel}')">🖨️ Imprimir Remito</button>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Comisionista</th><th>Viajes</th><th>Total Bultos</th><th>Tarifa/Bulto</th><th>Total a Pagar</th></tr></thead>
+        <tbody>
+          ${rows.map(r=>`<tr>
+            <td style="font-weight:600;color:var(--text)">${r.c.nombre}</td>
+            <td style="font-family:var(--mono)">${r.nViajes}</td>
+            <td style="font-family:var(--mono);font-size:13px;font-weight:600">${r.totalB}</td>
+            <td style="font-family:var(--mono);color:var(--text2)">$${r.tarifa.toLocaleString('es-AR')}</td>
+            <td style="font-family:var(--mono);font-size:14px;font-weight:700;color:var(--accent)">$${r.total.toLocaleString('es-AR')}</td>
+          </tr>`).join('')}
+          <tr style="border-top:2px solid var(--border2)">
+            <td colspan="4" style="font-weight:700;text-align:right;padding-right:16px">TOTAL GENERAL</td>
+            <td style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--green)">$${granTotal.toLocaleString('es-AR')}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function imprimirLiquidacion(mes, mesLabel) {
+  const comFiltro = document.getElementById('liq-com')?.value||'';
+  const parts = mes.split('-'); const año=parts[0]; const mesNum=parts[1];
+  const desde = año+'-'+mesNum+'-01';
+  const hasta = new Date(parseInt(año), parseInt(mesNum), 0).toISOString().split('T')[0];
+  const lista = comFiltro ? COMISIONISTAS_DATA.filter(c=>c.id===comFiltro) : COMISIONISTAS_DATA;
+  const rows = lista.map(c => {
+    const viajes = COM_VIAJES_DATA.filter(v=>v.comisionista_id===c.id && v.fecha>=desde && v.fecha<=hasta);
+    const bs = COM_BULTOS_DATA.filter(b=>viajes.some(v=>v.id===b.viaje_id));
+    const totalB = bs.reduce((a,b)=>a+(b.cantidad||1),0);
+    const tarifa = parseFloat(c.tarifa_actual)||0;
+    return { c, viajes, totalB, tarifa, total:totalB*tarifa };
+  });
+  const win = window.open('','_blank');
+  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Liquidacion</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#1a1a1a;font-size:13px}h1{font-size:20px;margin-bottom:4px}.sub{color:#666;font-size:12px;margin-bottom:32px}table{width:100%;border-collapse:collapse;margin-bottom:20px}th{background:#f0f0f0;padding:9px 12px;text-align:left;font-size:11px;letter-spacing:1px;text-transform:uppercase;border-bottom:2px solid #ccc}td{padding:9px 12px;border-bottom:1px solid #e0e0e0}.num{font-family:monospace}.grand{background:#f0f9f4;font-weight:700}.footer{margin-top:48px;display:flex;justify-content:space-between}.firma{border-top:1px solid #333;padding-top:8px;width:200px;text-align:center;font-size:11px;color:#666}@media print{button{display:none}}</style></head><body>');
+  win.document.write('<div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h1>Liquidacion de Comisionistas</h1><div class="sub">Periodo: '+mesLabel+' | Emitido: '+new Date().toLocaleDateString('es-AR')+'</div></div><button onclick="window.print()" style="padding:8px 16px;background:#000;color:#fff;border:none;cursor:pointer;border-radius:4px">Imprimir</button></div>');
+  rows.forEach(r => {
+    win.document.write('<table><thead><tr><th colspan="5" style="background:#e8e8e8;font-size:13px">'+r.c.nombre+'</th></tr><tr><th>Fecha</th><th>Bultos Envio</th><th>Bultos Retorno</th><th>Total Bultos</th><th>Estado</th></tr></thead><tbody>');
+    r.viajes.forEach(v => {
+      const bs = COM_BULTOS_DATA.filter(b=>b.viaje_id===v.id);
+      const env = bs.filter(b=>b.tipo==='ENVIO').reduce((a,b)=>a+(b.cantidad||1),0);
+      const ret = bs.filter(b=>b.tipo==='RETORNO').reduce((a,b)=>a+(b.cantidad||1),0);
+      win.document.write('<tr><td class="num">'+fmtDate(v.fecha)+'</td><td class="num">'+env+'</td><td class="num">'+ret+'</td><td class="num"><strong>'+(env+ret)+'</strong></td><td>'+v.estado+'</td></tr>');
+    });
+    win.document.write('<tr style="border-top:2px solid #333;background:#f9f9f9"><td>TOTALES</td><td colspan="2"></td><td class="num">'+r.totalB+' bultos</td><td></td></tr>');
+    win.document.write('<tr><td colspan="3" style="text-align:right">Tarifa por bulto:</td><td class="num" colspan="2">$'+r.tarifa.toLocaleString('es-AR')+'</td></tr>');
+    win.document.write('<tr class="grand"><td colspan="3" style="text-align:right">TOTAL A PAGAR:</td><td class="num" colspan="2" style="font-size:15px">$'+r.total.toLocaleString('es-AR')+'</td></tr>');
+    win.document.write('</tbody></table>');
+  });
+  win.document.write('<div class="footer"><div class="firma">Firma Comisionista</div><div class="firma">Firma Drogueria</div></div></body></html>');
+  win.document.close();
+}
+
+function renderCOMConfig() {
+  const el = document.getElementById('comview-config');
+  if (!el) return;
+  el.innerHTML = `
+    <div style="margin:12px 0 16px"><p style="color:var(--text2);font-size:13px">Actualizá la tarifa por bulto. Se aplica al próximo cierre mensual.</p></div>
+    <div class="panel">
+      <div class="panel-header"><div class="panel-title">TARIFAS POR BULTO</div></div>
+      <table class="data-table">
+        <thead><tr><th>Comisionista</th><th>Ruta</th><th>Tarifa actual ($/bulto)</th><th></th></tr></thead>
+        <tbody>
+          ${COMISIONISTAS_DATA.map(c=>`<tr>
+            <td style="font-weight:600;color:var(--text)">${c.nombre}</td>
+            <td style="color:var(--text2)">${c.ruta||'—'}</td>
+            <td><div style="display:flex;align-items:center;gap:8px">
+              <span style="color:var(--text3);font-family:var(--mono)">$</span>
+              <input type="number" step="0.01" id="tar-${c.id}" value="${c.tarifa_actual||0}"
+                style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:6px 10px;color:var(--text);font-family:var(--mono);font-size:13px;width:120px;outline:none;">
+            </div></td>
+            <td><button class="btn btn-outline btn-sm" onclick="guardarTarifa('${c.id}','${c.nombre}')">Guardar</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+async function guardarTarifa(comId, nombre) {
+  const val = document.getElementById('tar-'+comId)?.value;
+  if (!val) { toast('Ingresá un valor','warn'); return; }
+  try {
+    await sbPatch('comisionistas', 'id=eq.'+comId, { tarifa_actual: parseFloat(val) });
+    const c = COMISIONISTAS_DATA.find(x=>x.id===comId);
+    if (c) c.tarifa_actual = parseFloat(val);
+    toast('Tarifa actualizada: $'+parseFloat(val).toLocaleString('es-AR')+'/bulto', 'ok');
+  } catch(e) { toast('Error: '+e.message,'error'); }
+}
+
+async function marcarCompletado(viajeId) {
+  try {
+    await sbPatch('comisionistas_viajes', 'id=eq.'+viajeId, { estado: 'COMPLETADO' });
+    const v = COM_VIAJES_DATA.find(x=>x.id===viajeId);
+    if (v) v.estado = 'COMPLETADO';
+    toast('Viaje completado','ok');
+    renderCOMMovimientos(); renderCOMKpis();
+  } catch(e) { toast('Error: '+e.message,'error'); }
+}
+
+function abrirModalNuevoViaje() {
+  let m = document.getElementById('modal-nuevo-viaje');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal-nuevo-viaje';
+    m.className = 'modal-overlay';
+    m.style.alignItems = 'flex-start';
+    m.style.paddingTop = '30px';
+    m.innerHTML = `<div class="modal" style="max-width:620px;max-height:88vh;overflow-y:auto">
+      <div class="modal-header">
+        <div class="modal-title">+ Registrar Movimiento</div>
+        <div class="modal-close" onclick="document.getElementById('modal-nuevo-viaje').classList.remove('open')">✕</div>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Comisionista *</label>
+            <select class="form-select" id="nv-com"></select>
+          </div>
+          <div class="form-group-inner">
+            <label class="form-label-inner">Fecha *</label>
+            <input type="date" class="form-input" id="nv-fecha">
+          </div>
+        </div>
+        <div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--yellow);text-transform:uppercase;margin:14px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--border)">📤 ENVIOS — Drogueria a Zona</div>
+        <div id="nv-envios-list"></div>
+        <button class="btn btn-outline btn-sm" onclick="agregarBultoViaje('ENVIO')" style="margin-bottom:14px">+ Agregar destino de envio</button>
+        <div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--green);text-transform:uppercase;margin:6px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--border)">📥 RETORNOS — Zona a Drogueria</div>
+        <div id="nv-retornos-list"></div>
+        <button class="btn btn-outline btn-sm" onclick="agregarBultoViaje('RETORNO')" style="margin-bottom:14px">+ Agregar retorno</button>
+        <div class="form-row single" style="margin-bottom:0">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Observaciones</label>
+            <input type="text" class="form-input" id="nv-obs" placeholder="Opcional">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="document.getElementById('modal-nuevo-viaje').classList.remove('open')">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarNuevoViaje()">Registrar</button>
+      </div>
+    </div>`;
+    m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); });
+    document.body.appendChild(m);
+  }
+  const selC = document.getElementById('nv-com');
+  selC.innerHTML = '<option value="">Seleccionar...</option>';
+  COMISIONISTAS_DATA.forEach(c => selC.innerHTML += '<option value="'+c.id+'">'+c.nombre+'</option>');
+  document.getElementById('nv-fecha').value = HOY();
+  document.getElementById('nv-obs').value = '';
+  document.getElementById('nv-envios-list').innerHTML = '';
+  document.getElementById('nv-retornos-list').innerHTML = '';
+  window._bultoIdx = 0;
+  agregarBultoViaje('ENVIO');
+  agregarBultoViaje('RETORNO');
+  m.classList.add('open');
+}
+
+function agregarBultoViaje(tipo) {
+  if (!window._bultoIdx) window._bultoIdx = 0;
+  const idx = window._bultoIdx++;
+  const listId = tipo === 'ENVIO' ? 'nv-envios-list' : 'nv-retornos-list';
+  const el = document.getElementById(listId);
+  if (!el) return;
+  const destinosZona = DESTINOS_DATA.filter(d => d.zona === 'Zona');
+  const destinosRC = DESTINOS_DATA.filter(d => d.zona === 'Rio Cuarto' || d.zona === 'Río Cuarto');
+  const div = document.createElement('div');
+  div.id = 'bulto-'+idx;
+  div.style.cssText = 'background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:12px;margin-bottom:8px;position:relative';
+  const destOpts = tipo === 'ENVIO'
+    ? '<option value="">Seleccionar sucursal zona...</option>'+destinosZona.map(d=>'<option value="'+d.id+'">'+d.nombre+'</option>').join('')
+    : '<option value="">Para drogueria (sin redistribucion)</option><optgroup label="Redistribuir a RC">'+destinosRC.map(d=>'<option value="'+d.id+'">'+d.nombre+'</option>').join('')+'</optgroup>';
+  div.innerHTML = '<button onclick="document.getElementById('bulto-'+idx+'').remove()" style="position:absolute;top:8px;right:8px;background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px">✕</button>'
+    +'<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:8px">'
+    +'<div class="form-group-inner"><label class="form-label-inner">'+(tipo==='ENVIO'?'Destino zona':'Destino final RC')+'</label>'
+    +'<select class="form-select" id="bd-dest-'+idx+'">'+destOpts+'</select></div>'
+    +'<div class="form-group-inner"><label class="form-label-inner">Cant. bultos</label>'
+    +'<input type="number" min="1" value="1" class="form-input" id="bd-cant-'+idx+'" style="text-align:center"></div></div>'
+    +'<div class="form-group-inner"><label class="form-label-inner">Contenido / Descripcion</label>'
+    +'<input type="text" class="form-input" id="bd-cont-'+idx+'" placeholder="Medicamentos, Documentacion..."></div>'
+    +'<input type="hidden" id="bd-tipo-'+idx+'" value="'+tipo+'">';
+  el.appendChild(div);
+}
+
+async function confirmarNuevoViaje() {
+  const comId = document.getElementById('nv-com').value;
+  const fecha = document.getElementById('nv-fecha').value;
+  const obs = document.getElementById('nv-obs').value.trim()||null;
+  if (!comId||!fecha) { toast('Selecciona comisionista y fecha','warn'); return; }
+  const bultosEls = document.querySelectorAll('[id^="bd-tipo-"]');
+  const bultos = [];
+  for (const el of bultosEls) {
+    const idx = el.id.replace('bd-tipo-','');
+    const tipo = el.value;
+    const destId = document.getElementById('bd-dest-'+idx)?.value||null;
+    const cant = parseInt(document.getElementById('bd-cant-'+idx)?.value||'1');
+    const cont = document.getElementById('bd-cont-'+idx)?.value.trim()||null;
+    if (cant>0) bultos.push({ tipo, destino_id:destId||null, cantidad:cant, contenido:cont });
+  }
+  if (!bultos.length) { toast('Agrega al menos un bulto','warn'); return; }
+  try {
+    const viaje = await sbPost('comisionistas_viajes', { comisionista_id:comId, fecha, estado:'EN_RUTA', obs, creado_por:SESSION.id });
+    for (const b of bultos) await sbPost('comisionistas_bultos', { viaje_id:viaje.id, ...b, retornado:false });
+    await sbPost('auditoria', { usuario_id:SESSION.id, username:SESSION.username, accion:'NUEVO_VIAJE', modulo:'COMISIONISTAS', detalle:{comisionista:comId} });
+    document.getElementById('modal-nuevo-viaje').classList.remove('open');
+    toast('Movimiento registrado','ok');
+    [COM_VIAJES_DATA, COM_BULTOS_DATA] = await Promise.all([
+      sbGet('comisionistas_viajes','order=fecha.desc&limit=300&select=id,comisionista_id,fecha,estado,obs,creado_en'),
+      sbGet('comisionistas_bultos','select=id,viaje_id,destino_id,tipo,cantidad,contenido,retornado'),
+    ]);
+    renderCOMKpis(); renderCOMMovimientos();
+  } catch(e) { toast('Error: '+e.message,'error'); }
+}
+
+
 window.addEventListener('DOMContentLoaded', () => {
   const s = loadSession();
   if (s) { SESSION = s; mostrarApp(); }
