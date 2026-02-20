@@ -852,6 +852,7 @@ function navTo(page, el) {
     dashboard:     () => renderDashboard(mc),
     usuarios:      () => renderUsuarios(mc),
     auditoria:     () => renderAuditoria(mc),
+    bachas:        () => renderBachas(mc),
   };
   if (pages[page]) pages[page]();
   else renderPlaceholder(mc, page);
@@ -1172,6 +1173,672 @@ function toast(msg, tipo = 'ok') {
   t.textContent = msg;
   clearTimeout(t._t);
   t._t = setTimeout(() => t.style.display = 'none', 3500);
+}
+
+// ══════════════════════════════════════════════
+//  MÓDULO BACHAS
+// ══════════════════════════════════════════════
+
+let BACHAS_DATA = [];
+let DESTINOS_DATA = [];
+let MOVIMIENTOS_DATA = [];
+let BACHAS_TAB = 'mapa';
+
+async function renderBachas(el) {
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;margin-bottom:2px">Control de Bachas</h2>
+        <p style="color:var(--text3);font-family:var(--mono);font-size:11px">// SEGUIMIENTO DE BACHAS EN CIRCULACIÓN</p>
+      </div>
+      ${SESSION.rol !== 'solo_lectura' ? `<button class="btn btn-primary" onclick="abrirModalSalida()">+ Registrar Salida</button>` : ''}
+    </div>
+
+    <!-- Tabs -->
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin:16px -28px 0;padding:0 28px;">
+      <div class="b-tab active" id="btab-mapa" onclick="switchBTab('mapa')">MAPA DE BACHAS</div>
+      <div class="b-tab" id="btab-calle" onclick="switchBTab('calle')">EN CALLE <span id="b-badge-calle" style="font-family:var(--mono);font-size:9px;background:rgba(255,193,7,.15);color:var(--yellow);padding:1px 6px;border-radius:8px;margin-left:4px">0</span></div>
+      <div class="b-tab" id="btab-historial" onclick="switchBTab('historial')">HISTORIAL</div>
+    </div>
+
+    <style>
+      .b-tab { padding:12px 20px;font-size:12px;font-weight:600;font-family:var(--mono);letter-spacing:.5px;color:var(--text3);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s; }
+      .b-tab:hover { color:var(--text2); }
+      .b-tab.active { color:var(--accent);border-bottom-color:var(--accent); }
+    </style>
+
+    <!-- KPIs -->
+    <div class="kpi-grid" style="margin-top:20px">
+      <div class="kpi-card green"><div class="kpi-label">// DISPONIBLES</div><div class="kpi-value" id="bkpi-disp">…</div><div class="kpi-sub">en depósito</div></div>
+      <div class="kpi-card yellow"><div class="kpi-label">// EN CALLE</div><div class="kpi-value" id="bkpi-calle">…</div><div class="kpi-sub">en circulación</div></div>
+      <div class="kpi-card red"><div class="kpi-label">// VENCIDAS</div><div class="kpi-value" id="bkpi-venc">…</div><div class="kpi-sub">retorno atrasado</div></div>
+      <div class="kpi-card blue"><div class="kpi-label">// TOTAL</div><div class="kpi-value">100</div><div class="kpi-sub">bachas registradas</div></div>
+    </div>
+
+    <!-- Alertas -->
+    <div id="b-alert-venc" style="display:none;background:rgba(255,71,87,.1);border:1px solid rgba(255,71,87,.25);border-radius:4px;padding:10px 16px;margin-bottom:12px;font-size:12px;color:var(--red);font-family:var(--mono)"></div>
+    <div id="b-alert-hoy" style="display:none;background:rgba(255,193,7,.1);border:1px solid rgba(255,193,7,.25);border-radius:4px;padding:10px 16px;margin-bottom:12px;font-size:12px;color:var(--yellow);font-family:var(--mono)"></div>
+
+    <!-- Views -->
+    <div id="bview-mapa"></div>
+    <div id="bview-calle" style="display:none"></div>
+    <div id="bview-historial" style="display:none"></div>
+  `;
+
+  // Cargar datos
+  try {
+    [BACHAS_DATA, DESTINOS_DATA, MOVIMIENTOS_DATA] = await Promise.all([
+      sbGet('bachas', 'activa=eq.true&order=codigo.asc&select=id,codigo,descripcion'),
+      sbGet('destinos', 'activo=eq.true&order=zona.asc,nombre.asc&select=id,codigo,nombre,zona'),
+      sbGet('bachas_movimientos', 'order=fecha_evento.desc&select=id,bacha_id,tipo,destino_id,responsable_txt,fecha_evento,retorno_esperado,fecha_retorno,estado_retorno,observaciones,obs_retorno,creado_por'),
+    ]);
+    renderBKpis();
+    renderBMapa();
+  } catch(e) {
+    el.innerHTML += `<div style="color:var(--red);font-family:var(--mono);font-size:12px;margin-top:16px">Error cargando datos: ${e.message}</div>`;
+  }
+}
+
+function switchBTab(tab) {
+  BACHAS_TAB = tab;
+  ['mapa','calle','historial'].forEach(t => {
+    document.getElementById(`btab-${t}`)?.classList.toggle('active', t === tab);
+    const v = document.getElementById(`bview-${t}`);
+    if (v) v.style.display = t === tab ? 'block' : 'none';
+  });
+  if (tab === 'mapa') renderBMapa();
+  if (tab === 'calle') renderBCalle();
+  if (tab === 'historial') renderBHistorial();
+}
+
+// ── Estado de cada bacha ──
+const HOY = () => new Date().toISOString().split('T')[0];
+
+function estadoBacha(bachaId) {
+  const salidas = MOVIMIENTOS_DATA.filter(m => m.bacha_id === bachaId && m.tipo === 'SALIDA' && !m.fecha_retorno);
+  if (!salidas.length) return { estado: 'disponible', mov: null };
+  const mov = salidas[0];
+  const hoy = HOY();
+  if (mov.retorno_esperado < hoy) return { estado: 'vencida', mov };
+  if (mov.retorno_esperado === hoy) return { estado: 'hoy', mov };
+  return { estado: 'en-calle', mov };
+}
+
+function destNombre(id) {
+  const d = DESTINOS_DATA.find(x => x.id === id);
+  return d ? d.nombre : '—';
+}
+
+function destNombreCorto(id) {
+  const d = DESTINOS_DATA.find(x => x.id === id);
+  if (!d) return '—';
+  return d.nombre.replace('Farmacia ','').replace(' RC','');
+}
+
+// ── KPIs ──
+function renderBKpis() {
+  let disp = 0, calle = 0, venc = 0, hoyC = 0;
+  const vencList = [], hoyList = [];
+
+  BACHAS_DATA.forEach(b => {
+    const { estado, mov } = estadoBacha(b.id);
+    if (estado === 'disponible') disp++;
+    else { calle++; if (estado === 'vencida') { venc++; vencList.push(b.codigo); } else if (estado === 'hoy') { hoyC++; hoyList.push(b.codigo); } }
+  });
+
+  document.getElementById('bkpi-disp').textContent = disp;
+  document.getElementById('bkpi-calle').textContent = calle;
+  document.getElementById('bkpi-venc').textContent = venc;
+  if (venc > 0) document.getElementById('bkpi-venc').style.color = 'var(--red)';
+  const badge = document.getElementById('b-badge-calle');
+  if (badge) badge.textContent = calle;
+
+  const av = document.getElementById('b-alert-venc');
+  const ah = document.getElementById('b-alert-hoy');
+  if (av) { av.style.display = venc > 0 ? 'block' : 'none'; av.textContent = `⚠ RETORNO VENCIDO: ${vencList.join(', ')}`; }
+  if (ah) { ah.style.display = hoyC > 0 ? 'block' : 'none'; ah.textContent = `🕐 VENCEN HOY: ${hoyList.join(', ')}`; }
+}
+
+// ── MAPA GRID ──
+function renderBMapa() {
+  const el = document.getElementById('bview-mapa');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div style="display:flex;gap:16px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+      <div style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text2)"><div style="width:8px;height:8px;border-radius:50%;background:var(--green)"></div>Disponible</div>
+      <div style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text2)"><div style="width:8px;height:8px;border-radius:50%;background:var(--yellow)"></div>En calle</div>
+      <div style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text2)"><div style="width:8px;height:8px;border-radius:50%;background:var(--orange)"></div>Vence hoy</div>
+      <div style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text2)"><div style="width:8px;height:8px;border-radius:50%;background:var(--red)"></div>Vencida</div>
+      <div style="flex:1"></div>
+      <input type="text" id="b-search-mapa" placeholder="Buscar código..." oninput="filtrarMapa()"
+        style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:7px 12px;color:var(--text);font-size:12px;outline:none;width:180px;">
+      <select id="b-filter-estado" onchange="filtrarMapa()" style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:7px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="">Todos los estados</option>
+        <option value="disponible">Disponible</option>
+        <option value="en-calle">En calle</option>
+        <option value="hoy">Vence hoy</option>
+        <option value="vencida">Vencida</option>
+      </select>
+    </div>
+    <div id="b-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:7px;"></div>
+  `;
+  filtrarMapa();
+}
+
+function filtrarMapa() {
+  const search = (document.getElementById('b-search-mapa')?.value || '').toLowerCase();
+  const fEstado = document.getElementById('b-filter-estado')?.value || '';
+  const grid = document.getElementById('b-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+
+  BACHAS_DATA.forEach(b => {
+    const { estado, mov } = estadoBacha(b.id);
+    if (search && !b.codigo.toLowerCase().includes(search)) return;
+    if (fEstado && estado !== fEstado) return;
+
+    const colors = { disponible: 'var(--green)', 'en-calle': 'var(--yellow)', hoy: '#ff7f1e', vencida: 'var(--red)' };
+    const bgColors = { disponible: 'rgba(0,217,126,.04)', 'en-calle': 'rgba(255,193,7,.05)', hoy: 'rgba(255,127,30,.07)', vencida: 'rgba(255,71,87,.08)' };
+    const borderColors = { disponible: 'rgba(0,217,126,.3)', 'en-calle': 'rgba(255,193,7,.35)', hoy: 'rgba(255,127,30,.5)', vencida: 'rgba(255,71,87,.5)' };
+    const dest = mov ? destNombreCorto(mov.destino_id) : '';
+
+    const cell = document.createElement('div');
+    cell.style.cssText = `aspect-ratio:1;background:${bgColors[estado]};border:1px solid ${borderColors[estado]};border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;transition:all .15s;padding:6px;`;
+    cell.innerHTML = `
+      <div style="font-family:var(--mono);font-size:11px;font-weight:500;color:var(--text);text-align:center">${b.codigo.replace('BAC-','')}</div>
+      <div style="width:6px;height:6px;border-radius:50%;background:${colors[estado]};margin-top:4px;${estado==='vencida'?'animation:bpulse 1.5s infinite':''}"></div>
+      ${dest ? `<div style="font-size:8px;color:var(--text3);margin-top:3px;text-align:center;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%">${dest}</div>` : ''}
+    `;
+    cell.onmouseover = () => cell.style.transform = 'scale(1.06)';
+    cell.onmouseout = () => cell.style.transform = '';
+    cell.onclick = () => abrirDetalleBacha(b.id);
+    grid.appendChild(cell);
+  });
+}
+
+// ── EN CALLE ──
+function renderBCalle() {
+  const el = document.getElementById('bview-calle');
+  if (!el) return;
+
+  const enCalle = BACHAS_DATA.map(b => {
+    const { estado, mov } = estadoBacha(b.id);
+    if (estado === 'disponible') return null;
+    return { b, estado, mov };
+  }).filter(Boolean).sort((a,b) => a.mov.retorno_esperado.localeCompare(b.mov.retorno_esperado));
+
+  if (!enCalle.length) {
+    el.innerHTML = `<div style="text-align:center;padding:48px;color:var(--text3);font-family:var(--mono);font-size:12px">✓ NO HAY BACHAS EN CALLE</div>`;
+    return;
+  }
+
+  const tagMap = {
+    'en-calle': '<span class="tag tag-yellow">En término</span>',
+    vencida: '<span class="tag tag-red">⚠ Vencida</span>',
+    hoy: '<span class="tag" style="background:rgba(255,127,30,.12);color:#ff7f1e;border:1px solid rgba(255,127,30,.25)">Vence hoy</span>',
+  };
+
+  el.innerHTML = `
+    <div class="panel" style="margin-top:4px">
+      <div class="panel-header"><div class="panel-title">BACHAS FUERA DEL DEPÓSITO</div></div>
+      <table class="data-table">
+        <thead><tr><th>Código</th><th>Destino</th><th>Responsable</th><th>Salida</th><th>Retorno esperado</th><th>Días</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <tbody>
+          ${enCalle.map(({ b, estado, mov }) => {
+            const dias = Math.floor((new Date(HOY()) - new Date(mov.fecha_evento)) / 86400000);
+            return `
+              <tr>
+                <td style="font-family:var(--mono);color:var(--accent);font-weight:600">${b.codigo}</td>
+                <td style="font-weight:500;color:var(--text)">${destNombre(mov.destino_id)}</td>
+                <td>${mov.responsable_txt || '—'}</td>
+                <td style="font-family:var(--mono);font-size:11px">${fmtDate(mov.fecha_evento)}</td>
+                <td style="font-family:var(--mono);font-size:11px;color:${estado==='vencida'?'var(--red)':estado==='hoy'?'#ff7f1e':''}">${fmtDate(mov.retorno_esperado)}</td>
+                <td style="font-family:var(--mono);font-size:11px;color:${dias>3?'var(--yellow)':''}">${dias}d</td>
+                <td>${tagMap[estado] || ''}</td>
+                <td style="display:flex;gap:6px">
+                  ${SESSION.rol !== 'solo_lectura' ? `<button class="btn btn-success btn-sm" onclick="abrirModalRetorno('${b.id}','${b.codigo}','${mov.id}','${destNombre(mov.destino_id)}','${fmtDate(mov.fecha_evento)}','${fmtDate(mov.retorno_esperado)}')">↩ Retorno</button>` : ''}
+                  <button class="btn btn-outline btn-sm" onclick="abrirDetalleBacha('${b.id}')">Ver</button>
+                </td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ── HISTORIAL ──
+async function renderBHistorial() {
+  const el = document.getElementById('bview-historial');
+  if (!el) return;
+  el.innerHTML = `<div style="color:var(--text3);font-family:var(--mono);font-size:11px;margin-top:8px">Cargando historial...</div>`;
+
+  try {
+    const movs = await sbGet('bachas_movimientos',
+      'order=creado_en.desc&limit=200&select=id,bacha_id,tipo,destino_id,responsable_txt,fecha_evento,retorno_esperado,fecha_retorno,estado_retorno,observaciones,obs_retorno,creado_en'
+    );
+
+    // Enriquecer con código de bacha
+    const rows = movs.map(m => {
+      const b = BACHAS_DATA.find(x => x.id === m.bacha_id);
+      return { ...m, codigo: b ? b.codigo : '—' };
+    });
+
+    el.innerHTML = `
+      <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;margin-top:4px">
+        <div style="display:flex;align-items:center;gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:0 12px;flex:1;min-width:180px;max-width:260px">
+          <span style="color:var(--text3)">🔍</span>
+          <input type="text" id="b-search-hist" placeholder="Código, destino..." oninput="filtrarHistorial()"
+            style="background:none;border:none;outline:none;color:var(--text);font-size:12px;padding:8px 0;width:100%">
+        </div>
+        <select id="b-filter-hist-tipo" onchange="filtrarHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+          <option value="">Todos los eventos</option>
+          <option value="SALIDA">Salidas</option>
+          <option value="RETORNO">Retornos</option>
+        </select>
+        <button class="btn btn-outline btn-sm" onclick="exportarBachasCSV()">⬇ Exportar CSV</button>
+      </div>
+      <div class="panel">
+        <table class="data-table" id="b-hist-table">
+          <thead><tr><th>Fecha</th><th>Evento</th><th>Código</th><th>Destino</th><th>Responsable</th><th>Retorno esp.</th><th>Retorno real</th><th>Estado</th></tr></thead>
+          <tbody id="b-hist-tbody"></tbody>
+        </table>
+      </div>
+    `;
+
+    window._bachHistRows = rows;
+    filtrarHistorial();
+  } catch(e) {
+    el.innerHTML = `<div style="color:var(--red);font-family:var(--mono);font-size:12px">Error: ${e.message}</div>`;
+  }
+}
+
+function filtrarHistorial() {
+  const rows = window._bachHistRows || [];
+  const search = (document.getElementById('b-search-hist')?.value || '').toLowerCase();
+  const fTipo = document.getElementById('b-filter-hist-tipo')?.value || '';
+  const tbody = document.getElementById('b-hist-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  rows.filter(m => {
+    if (fTipo === 'SALIDA' && m.tipo !== 'SALIDA') return false;
+    if (fTipo === 'RETORNO' && !m.fecha_retorno) return false;
+    if (search) {
+      const hay = m.codigo.toLowerCase().includes(search) || destNombre(m.destino_id).toLowerCase().includes(search) || (m.responsable_txt||'').toLowerCase().includes(search);
+      if (!hay) return false;
+    }
+    return true;
+  }).forEach(m => {
+    // Fila salida
+    const trS = document.createElement('tr');
+    trS.innerHTML = `
+      <td style="font-family:var(--mono);font-size:11px">${fmtDate(m.fecha_evento)}</td>
+      <td><span class="tag tag-yellow">SALIDA</span></td>
+      <td style="font-family:var(--mono);color:var(--accent);font-weight:600">${m.codigo}</td>
+      <td>${destNombre(m.destino_id)}</td>
+      <td>${m.responsable_txt || '—'}</td>
+      <td style="font-family:var(--mono);font-size:11px">${fmtDate(m.retorno_esperado)}</td>
+      <td style="font-family:var(--mono);font-size:11px">${m.fecha_retorno ? fmtDate(m.fecha_retorno) : '—'}</td>
+      <td>${m.fecha_retorno ? '<span class="tag tag-green">RETORNÓ</span>' : '<span class="tag tag-yellow">EN CALLE</span>'}</td>
+    `;
+    tbody.appendChild(trS);
+  });
+
+  if (!tbody.children.length) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text3);font-family:var(--mono);font-size:11px">Sin registros</td></tr>`;
+  }
+}
+
+function exportarBachasCSV() {
+  const rows = window._bachHistRows || [];
+  let csv = 'Fecha Evento,Tipo,Código,Destino,Responsable,Retorno Esperado,Fecha Retorno,Estado Retorno\n';
+  rows.forEach(m => {
+    csv += `${m.fecha_evento},${m.tipo},${m.codigo},"${destNombre(m.destino_id)}","${m.responsable_txt||''}",${m.retorno_esperado||''},${m.fecha_retorno||''},${m.estado_retorno||''}\n`;
+  });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `bachas_historial_${HOY()}.csv`;
+  a.click();
+}
+
+// ── DETALLE BACHA ──
+function abrirDetalleBacha(bachaId) {
+  const b = BACHAS_DATA.find(x => x.id === bachaId);
+  const { estado, mov } = estadoBacha(bachaId);
+  const movs = MOVIMIENTOS_DATA.filter(m => m.bacha_id === bachaId);
+
+  const estadoTag = {
+    disponible: '<span class="tag tag-green">Disponible</span>',
+    'en-calle': '<span class="tag tag-yellow">En calle</span>',
+    vencida: '<span class="tag tag-red">⚠ Vencida</span>',
+    hoy: '<span class="tag" style="background:rgba(255,127,30,.12);color:#ff7f1e;border:1px solid rgba(255,127,30,.25)">Vence hoy</span>',
+  }[estado];
+
+  let html = `
+    <div style="display:flex;align-items:center;gap:16px;padding:14px;background:var(--bg3);border-radius:4px;margin-bottom:18px">
+      <div style="font-family:var(--mono);font-size:30px;font-weight:500;color:var(--accent);line-height:1">${b.codigo}</div>
+      <div style="flex:1">
+        <div style="font-size:14px;font-weight:600;margin-bottom:4px">${b.descripcion || 'Sin descripción'}</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text3)">${movs.length} movimiento${movs.length!==1?'s':''} registrados</div>
+      </div>
+      ${estadoTag}
+    </div>
+  `;
+
+  if (mov) {
+    html += `
+      <div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--text3);text-transform:uppercase;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">// ESTADO ACTUAL</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:14px;margin-bottom:16px;font-size:13px">
+        <div><div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:3px">DESTINO</div>${destNombre(mov.destino_id)}</div>
+        <div><div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:3px">RESPONSABLE</div>${mov.responsable_txt||'—'}</div>
+        <div><div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:3px">FECHA SALIDA</div>${fmtDate(mov.fecha_evento)}</div>
+        <div><div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:3px">RETORNO ESPERADO</div><span style="color:${estado==='vencida'?'var(--red)':estado==='hoy'?'#ff7f1e':''}">${fmtDate(mov.retorno_esperado)}</span></div>
+        ${mov.observaciones ? `<div style="grid-column:1/-1"><div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:3px">OBSERVACIONES</div>${mov.observaciones}</div>` : ''}
+      </div>
+    `;
+  }
+
+  html += `<div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--text3);text-transform:uppercase;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">// HISTORIAL</div>`;
+
+  if (!movs.length) {
+    html += `<div style="color:var(--text3);font-family:var(--mono);font-size:11px">Sin movimientos aún.</div>`;
+  } else {
+    html += movs.sort((a,z) => z.fecha_evento.localeCompare(a.fecha_evento)).map(m => `
+      <div style="display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;flex-direction:column;align-items:center;width:24px;flex-shrink:0">
+          <div style="width:9px;height:9px;border-radius:50%;background:${m.fecha_retorno?'var(--green)':'var(--yellow)'};margin-top:3px"></div>
+        </div>
+        <div style="flex:1">
+          <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:2px">${m.fecha_retorno ? '📥 Retornó de' : '📤 Salida a'} ${destNombre(m.destino_id)}</div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--text3);line-height:1.6">
+            ${fmtDate(m.fecha_evento)} &nbsp;|&nbsp; ${m.responsable_txt||'—'}
+            ${m.fecha_retorno ? ` &nbsp;|&nbsp; Retornó: ${fmtDate(m.fecha_retorno)}` : ` &nbsp;|&nbsp; Esperado: ${fmtDate(m.retorno_esperado)}`}
+            ${m.estado_retorno && m.estado_retorno !== 'OK' ? ` &nbsp;|&nbsp; <span style="color:#ff7f1e">${m.estado_retorno}</span>` : ''}
+            ${m.observaciones ? `<br>${m.observaciones}` : ''}
+          </div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // Mostrar en modal genérico
+  mostrarModalInfo(`Bacha ${b.codigo}`, html, estado !== 'disponible' && SESSION.rol !== 'solo_lectura' ? `
+    <button class="btn btn-outline" onclick="cerrarModalInfo()">Cerrar</button>
+    <button class="btn btn-success" onclick="cerrarModalInfo();abrirModalRetorno('${b.id}','${b.codigo}','${mov?.id}','${destNombre(mov?.destino_id)}','${fmtDate(mov?.fecha_evento)}','${fmtDate(mov?.retorno_esperado)}')">↩ Registrar Retorno</button>
+  ` : `<button class="btn btn-outline" onclick="cerrarModalInfo()">Cerrar</button>
+    ${SESSION.rol !== 'solo_lectura' ? `<button class="btn btn-primary" onclick="cerrarModalInfo();abrirModalSalidaPresel('${b.id}')">📤 Registrar Salida</button>` : ''}`
+  );
+}
+
+// ── MODAL GENÉRICO INFO ──
+function mostrarModalInfo(titulo, html, footer) {
+  let m = document.getElementById('modal-info');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal-info';
+    m.className = 'modal-overlay';
+    m.innerHTML = `
+      <div class="modal" style="max-width:600px;max-height:85vh;overflow-y:auto">
+        <div class="modal-header">
+          <div class="modal-title" id="modal-info-title"></div>
+          <div class="modal-close" onclick="cerrarModalInfo()">✕</div>
+        </div>
+        <div class="modal-body" id="modal-info-body"></div>
+        <div class="modal-footer" id="modal-info-footer"></div>
+      </div>`;
+    m.addEventListener('click', e => { if (e.target === m) cerrarModalInfo(); });
+    document.body.appendChild(m);
+  }
+  document.getElementById('modal-info-title').textContent = titulo;
+  document.getElementById('modal-info-body').innerHTML = html;
+  document.getElementById('modal-info-footer').innerHTML = footer;
+  m.classList.add('open');
+}
+
+function cerrarModalInfo() {
+  document.getElementById('modal-info')?.classList.remove('open');
+}
+
+// ── MODAL SALIDA ──
+function abrirModalSalida(preselBachaId = null) {
+  let m = document.getElementById('modal-salida-b');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal-salida-b';
+    m.className = 'modal-overlay';
+    m.innerHTML = `
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title">📤 Registrar Salida de Bacha</div>
+          <div class="modal-close" onclick="document.getElementById('modal-salida-b').classList.remove('open')">✕</div>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Código de Bacha *</label>
+              <select class="form-select" id="ms-codigo"></select>
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">Destino *</label>
+              <select class="form-select" id="ms-destino"></select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Fecha Salida *</label>
+              <input type="date" class="form-input" id="ms-fecha">
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">Retorno Esperado *</label>
+              <input type="date" class="form-input" id="ms-retorno">
+            </div>
+          </div>
+          <div class="form-row single" style="margin-bottom:14px">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Responsable *</label>
+              <input type="text" class="form-input" id="ms-resp" placeholder="Nombre del responsable">
+            </div>
+          </div>
+          <div class="form-row single" style="margin-bottom:0">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Observaciones</label>
+              <textarea class="form-input" id="ms-obs" rows="2" placeholder="Contenido, instrucciones..." style="resize:vertical"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="document.getElementById('modal-salida-b').classList.remove('open')">Cancelar</button>
+          <button class="btn btn-primary" onclick="confirmarSalida()">Registrar Salida →</button>
+        </div>
+      </div>`;
+    m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+    document.body.appendChild(m);
+  }
+
+  // Llenar bachas disponibles
+  const selB = document.getElementById('ms-codigo');
+  selB.innerHTML = '<option value="">Seleccionar...</option>';
+  BACHAS_DATA.forEach(b => {
+    const { estado } = estadoBacha(b.id);
+    if (estado === 'disponible') selB.innerHTML += `<option value="${b.id}">${b.codigo}</option>`;
+  });
+  if (preselBachaId) selB.value = preselBachaId;
+
+  // Llenar destinos
+  const selD = document.getElementById('ms-destino');
+  selD.innerHTML = '<option value="">Seleccionar...</option>';
+  let lastZona = '';
+  DESTINOS_DATA.forEach(d => {
+    if (d.zona !== lastZona) { selD.innerHTML += `<optgroup label="── ${d.zona}">`; lastZona = d.zona; }
+    selD.innerHTML += `<option value="${d.id}">${d.nombre}</option>`;
+  });
+
+  // Fechas default
+  const hoy = HOY();
+  document.getElementById('ms-fecha').value = hoy;
+  const ret = new Date(); ret.setDate(ret.getDate()+3);
+  document.getElementById('ms-retorno').value = ret.toISOString().split('T')[0];
+  document.getElementById('ms-resp').value = '';
+  document.getElementById('ms-obs').value = '';
+
+  m.classList.add('open');
+}
+
+function abrirModalSalidaPresel(bachaId) {
+  abrirModalSalida(bachaId);
+}
+
+async function confirmarSalida() {
+  const bachaId = document.getElementById('ms-codigo').value;
+  const destinoId = document.getElementById('ms-destino').value;
+  const fecha = document.getElementById('ms-fecha').value;
+  const retorno = document.getElementById('ms-retorno').value;
+  const resp = document.getElementById('ms-resp').value.trim();
+  const obs = document.getElementById('ms-obs').value.trim();
+
+  if (!bachaId || !destinoId || !fecha || !retorno || !resp) { toast('⚠ Completá todos los campos obligatorios', 'warn'); return; }
+  if (retorno < fecha) { toast('⚠ El retorno no puede ser antes de la salida', 'warn'); return; }
+
+  try {
+    await sbPost('bachas_movimientos', {
+      bacha_id: bachaId, tipo: 'SALIDA', destino_id: destinoId,
+      responsable_txt: resp, fecha_evento: fecha, retorno_esperado: retorno,
+      observaciones: obs || null, creado_por: SESSION.id
+    });
+
+    await sbPost('auditoria', {
+      usuario_id: SESSION.id, username: SESSION.username,
+      accion: 'SALIDA_BACHA', modulo: 'BACHAS',
+      detalle: { bacha: BACHAS_DATA.find(b=>b.id===bachaId)?.codigo, destino: destNombre(destinoId) }
+    });
+
+    document.getElementById('modal-salida-b').classList.remove('open');
+    toast('✓ Salida registrada correctamente', 'ok');
+
+    // Recargar datos
+    MOVIMIENTOS_DATA = await sbGet('bachas_movimientos', 'order=fecha_evento.desc&select=id,bacha_id,tipo,destino_id,responsable_txt,fecha_evento,retorno_esperado,fecha_retorno,estado_retorno,observaciones,obs_retorno,creado_por');
+    renderBKpis();
+    if (BACHAS_TAB === 'mapa') renderBMapa();
+    if (BACHAS_TAB === 'calle') renderBCalle();
+
+  } catch(e) {
+    toast(`⚠ Error: ${e.message}`, 'error');
+  }
+}
+
+// ── MODAL RETORNO ──
+function abrirModalRetorno(bachaId, codigoBacha, movId, destino, fechaSalida, retornoEsp) {
+  let m = document.getElementById('modal-retorno-b');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal-retorno-b';
+    m.className = 'modal-overlay';
+    m.innerHTML = `
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title">📥 Registrar Retorno</div>
+          <div class="modal-close" onclick="document.getElementById('modal-retorno-b').classList.remove('open')">✕</div>
+        </div>
+        <div class="modal-body">
+          <div id="mr-info" style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:14px;margin-bottom:18px;display:flex;align-items:center;gap:14px"></div>
+          <div class="form-row">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Fecha Retorno *</label>
+              <input type="date" class="form-input" id="mr-fecha">
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">Recibido por *</label>
+              <input type="text" class="form-input" id="mr-resp" placeholder="Nombre">
+            </div>
+          </div>
+          <div class="form-row single" style="margin-bottom:14px">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Estado al retornar</label>
+              <select class="form-select" id="mr-estado">
+                <option value="OK">✓ En buen estado</option>
+                <option value="DAÑADA">⚠ Con daños</option>
+                <option value="INCOMPLETA">⚠ Incompleta</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row single" style="margin-bottom:0">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Observaciones</label>
+              <textarea class="form-input" id="mr-obs" rows="2" placeholder="Novedades al retorno..." style="resize:vertical"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="document.getElementById('modal-retorno-b').classList.remove('open')">Cancelar</button>
+          <button class="btn btn-success" onclick="confirmarRetorno()">Confirmar Retorno ✓</button>
+        </div>
+      </div>`;
+    m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+    document.body.appendChild(m);
+  }
+
+  document.getElementById('mr-info').innerHTML = `
+    <div style="font-family:var(--mono);font-size:26px;font-weight:500;color:var(--accent);line-height:1">${codigoBacha}</div>
+    <div>
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">${destino}</div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--text3)">Salida: ${fechaSalida} &nbsp;|&nbsp; Esperado: ${retornoEsp}</div>
+    </div>
+  `;
+  document.getElementById('mr-fecha').value = HOY();
+  document.getElementById('mr-resp').value = `${SESSION.nombre} ${SESSION.apellido}`;
+  document.getElementById('mr-obs').value = '';
+  document.getElementById('mr-estado').value = 'OK';
+
+  m._movId = movId;
+  m._bachaId = bachaId;
+  m._codigo = codigoBacha;
+  m.classList.add('open');
+}
+
+async function confirmarRetorno() {
+  const m = document.getElementById('modal-retorno-b');
+  const fecha = document.getElementById('mr-fecha').value;
+  const resp = document.getElementById('mr-resp').value.trim();
+  const estado = document.getElementById('mr-estado').value;
+  const obs = document.getElementById('mr-obs').value.trim();
+
+  if (!fecha || !resp) { toast('⚠ Completá fecha y responsable', 'warn'); return; }
+
+  try {
+    await sbPatch('bachas_movimientos', `id=eq.${m._movId}`, {
+      fecha_retorno: fecha, estado_retorno: estado,
+      obs_retorno: obs || null, responsable_txt: resp
+    });
+
+    await sbPost('auditoria', {
+      usuario_id: SESSION.id, username: SESSION.username,
+      accion: 'RETORNO_BACHA', modulo: 'BACHAS',
+      detalle: { bacha: m._codigo, estado_retorno: estado }
+    });
+
+    m.classList.remove('open');
+    toast('✓ Retorno registrado correctamente', 'ok');
+
+    // Recargar
+    MOVIMIENTOS_DATA = await sbGet('bachas_movimientos', 'order=fecha_evento.desc&select=id,bacha_id,tipo,destino_id,responsable_txt,fecha_evento,retorno_esperado,fecha_retorno,estado_retorno,observaciones,obs_retorno,creado_por');
+    renderBKpis();
+    if (BACHAS_TAB === 'mapa') renderBMapa();
+    if (BACHAS_TAB === 'calle') renderBCalle();
+
+  } catch(e) {
+    toast(`⚠ Error: ${e.message}`, 'error');
+  }
+}
+
+// ── UTILS FECHA ──
+function fmtDate(d) {
+  if (!d) return '—';
+  const [y,m,dd] = d.split('-');
+  return `${dd}/${m}/${y}`;
 }
 
 // ══════════════════════════════════════════════
