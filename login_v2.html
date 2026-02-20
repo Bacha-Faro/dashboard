@@ -853,6 +853,7 @@ function navTo(page, el) {
     usuarios:      () => renderUsuarios(mc),
     auditoria:     () => renderAuditoria(mc),
     bachas:        () => renderBachas(mc),
+    cadetes:       () => renderCadetes(mc),
   };
   if (pages[page]) pages[page]();
   else renderPlaceholder(mc, page);
@@ -1839,6 +1840,510 @@ function fmtDate(d) {
   if (!d) return '—';
   const [y,m,dd] = d.split('-');
   return `${dd}/${m}/${y}`;
+}
+
+// ══════════════════════════════════════════════
+//  MÓDULO CADETES
+// ══════════════════════════════════════════════
+
+let CADETES_DATA = [];
+let CADETES_MOV_DATA = [];
+let CADETES_TAB = 'hoy';
+
+async function renderCadetes(el) {
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;margin-bottom:2px">Control de Cadetes</h2>
+        <p style="color:var(--text3);font-family:var(--mono);font-size:11px">// TRAZABILIDAD DE ENTREGAS</p>
+      </div>
+      <div style="display:flex;gap:10px">
+        ${SESSION.rol !== 'solo_lectura' ? `
+          <button class="btn btn-outline" onclick="abrirModalNuevoCadete()">+ Cadete</button>
+          <button class="btn btn-primary" onclick="abrirModalNuevaEntrega()">+ Registrar Entrega</button>
+        ` : ''}
+      </div>
+    </div>
+
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin:16px -28px 0;padding:0 28px;">
+      <div class="b-tab active" id="ctab-hoy" onclick="switchCTab('hoy')">HOY</div>
+      <div class="b-tab" id="ctab-historial" onclick="switchCTab('historial')">HISTORIAL</div>
+      <div class="b-tab" id="ctab-cadetes" onclick="switchCTab('cadetes')">CADETES</div>
+    </div>
+
+    <div class="kpi-grid" style="margin-top:20px">
+      <div class="kpi-card blue"><div class="kpi-label">// ENTREGAS HOY</div><div class="kpi-value" id="ckpi-hoy">…</div><div class="kpi-sub">registradas</div></div>
+      <div class="kpi-card yellow"><div class="kpi-label">// RETIRADAS</div><div class="kpi-value" id="ckpi-ret">…</div><div class="kpi-sub">salieron del depósito</div></div>
+      <div class="kpi-card green"><div class="kpi-label">// ENTREGADAS</div><div class="kpi-value" id="ckpi-ent">…</div><div class="kpi-sub">confirmadas en destino</div></div>
+      <div class="kpi-card red"><div class="kpi-label">// PENDIENTES</div><div class="kpi-value" id="ckpi-pend">…</div><div class="kpi-sub">sin confirmar entrega</div></div>
+    </div>
+
+    <div id="cview-hoy"></div>
+    <div id="cview-historial" style="display:none"></div>
+    <div id="cview-cadetes" style="display:none"></div>
+  `;
+
+  try {
+    [CADETES_DATA, CADETES_MOV_DATA] = await Promise.all([
+      sbGet('cadetes', 'activo=eq.true&order=nombre.asc&select=id,nombre,apellido,telefono,tarifa'),
+      sbGet('cadetes_movimientos', 'order=fecha.desc,hora_salida.desc&select=id,cadete_id,fecha,destino_id,destino_libre,articulos,cantidad,hora_salida,hora_retorno,estado,obs,creado_en'),
+    ]);
+    renderCKpis();
+    renderCHoy();
+  } catch(e) {
+    el.innerHTML += `<div style="color:var(--red);font-family:var(--mono);font-size:12px;margin-top:16px">Error: ${e.message}</div>`;
+  }
+}
+
+function switchCTab(tab) {
+  CADETES_TAB = tab;
+  ['hoy','historial','cadetes'].forEach(t => {
+    document.getElementById(`ctab-${t}`)?.classList.toggle('active', t === tab);
+    const v = document.getElementById(`cview-${t}`);
+    if (v) v.style.display = t === tab ? 'block' : 'none';
+  });
+  if (tab === 'hoy') renderCHoy();
+  if (tab === 'historial') renderCHistorial();
+  if (tab === 'cadetes') renderCListaCadetes();
+}
+
+function renderCKpis() {
+  const hoy = HOY();
+  const deHoy = CADETES_MOV_DATA.filter(m => m.fecha === hoy);
+  const retiradas = deHoy.filter(m => m.estado !== 'PENDIENTE').length;
+  const entregadas = deHoy.filter(m => m.estado === 'ENTREGADO').length;
+  const pendientes = deHoy.filter(m => m.estado !== 'ENTREGADO').length;
+
+  document.getElementById('ckpi-hoy').textContent = deHoy.length;
+  document.getElementById('ckpi-ret').textContent = retiradas;
+  document.getElementById('ckpi-ent').textContent = entregadas;
+  document.getElementById('ckpi-pend').textContent = pendientes;
+  if (pendientes > 0) document.getElementById('ckpi-pend').style.color = 'var(--red)';
+}
+
+// ── HOY ──
+function renderCHoy() {
+  const el = document.getElementById('cview-hoy');
+  if (!el) return;
+  const hoy = HOY();
+  const deHoy = CADETES_MOV_DATA.filter(m => m.fecha === hoy);
+
+  if (!deHoy.length) {
+    el.innerHTML = `<div style="text-align:center;padding:48px;color:var(--text3);font-family:var(--mono);font-size:12px">SIN ENTREGAS REGISTRADAS HOY<br><span style="font-size:10px;margin-top:8px;display:block">Usá "+ Registrar Entrega" para agregar</span></div>`;
+    return;
+  }
+
+  // Agrupar por cadete
+  const porCadete = {};
+  deHoy.forEach(m => {
+    if (!porCadete[m.cadete_id]) porCadete[m.cadete_id] = [];
+    porCadete[m.cadete_id].push(m);
+  });
+
+  const estadoTag = {
+    PENDIENTE: '<span class="tag tag-yellow">Pendiente retiro</span>',
+    EN_CAMINO: '<span class="tag" style="background:rgba(0,194,255,.12);color:var(--accent);border:1px solid rgba(0,194,255,.25)">Retiró — en camino</span>',
+    ENTREGADO: '<span class="tag tag-green">✓ Entregado</span>',
+    NO_ENTREGADO: '<span class="tag tag-red">No entregado</span>',
+  };
+
+  el.innerHTML = Object.entries(porCadete).map(([cadeteId, movs]) => {
+    const cadete = CADETES_DATA.find(c => c.id === cadeteId);
+    const nombre = cadete ? `${cadete.nombre} ${cadete.apellido}` : 'Cadete desconocido';
+    return `
+      <div class="panel" style="margin-top:12px">
+        <div class="panel-header">
+          <div class="panel-title" style="font-size:13px;color:var(--text)">${nombre}</div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--text3)">${movs.length} entrega${movs.length!==1?'s':''} hoy</div>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>Destino</th><th>Artículos</th><th>Hora salida</th><th>Hora entrega</th><th>Estado</th><th>Acciones</th></tr></thead>
+          <tbody>
+            ${movs.map(m => `
+              <tr>
+                <td style="font-weight:500;color:var(--text)">${m.destino_id ? destNombre(m.destino_id) : (m.destino_libre || '—')}</td>
+                <td style="color:var(--text2);font-size:12px">${m.articulos || '—'}</td>
+                <td style="font-family:var(--mono);font-size:11px">${m.hora_salida || '—'}</td>
+                <td style="font-family:var(--mono);font-size:11px">${m.hora_retorno || '—'}</td>
+                <td>${estadoTag[m.estado] || m.estado}</td>
+                <td style="display:flex;gap:6px;flex-wrap:wrap">
+                  ${SESSION.rol !== 'solo_lectura' ? `
+                    ${m.estado === 'PENDIENTE' ? `<button class="btn btn-outline btn-sm" onclick="actualizarEstadoCadete('${m.id}','EN_CAMINO')">📤 Retiró</button>` : ''}
+                    ${m.estado === 'EN_CAMINO' ? `<button class="btn btn-success btn-sm" onclick="actualizarEstadoCadete('${m.id}','ENTREGADO')">✓ Entregó</button>
+                    <button class="btn btn-outline btn-sm" style="border-color:rgba(255,71,87,.3);color:var(--red)" onclick="actualizarEstadoCadete('${m.id}','NO_ENTREGADO')">✗ No entregó</button>` : ''}
+                    ${m.estado === 'ENTREGADO' || m.estado === 'NO_ENTREGADO' ? `<span style="color:var(--text3);font-size:11px;font-family:var(--mono)">Finalizado</span>` : ''}
+                  ` : estadoTag[m.estado] || m.estado}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── HISTORIAL ──
+async function renderCHistorial() {
+  const el = document.getElementById('cview-historial');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div style="display:flex;gap:10px;margin:12px 0;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:0 12px;flex:1;min-width:180px;max-width:260px">
+        <span style="color:var(--text3)">🔍</span>
+        <input type="text" id="c-search-hist" placeholder="Cadete, destino..." oninput="filtrarCHistorial()"
+          style="background:none;border:none;outline:none;color:var(--text);font-size:12px;padding:8px 0;width:100%">
+      </div>
+      <select id="c-filter-cadete" onchange="filtrarCHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="">Todos los cadetes</option>
+        ${CADETES_DATA.map(c => `<option value="${c.id}">${c.nombre} ${c.apellido}</option>`).join('')}
+      </select>
+      <select id="c-filter-estado" onchange="filtrarCHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="">Todos los estados</option>
+        <option value="PENDIENTE">Pendiente retiro</option>
+        <option value="EN_CAMINO">En camino</option>
+        <option value="ENTREGADO">Entregado</option>
+        <option value="NO_ENTREGADO">No entregado</option>
+      </select>
+      <input type="date" id="c-filter-fecha" onchange="filtrarCHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+      <button class="btn btn-outline btn-sm" onclick="exportarCadetesCSV()">⬇ Exportar</button>
+    </div>
+    <div class="panel">
+      <table class="data-table">
+        <thead><tr><th>Fecha</th><th>Cadete</th><th>Destino</th><th>Artículos</th><th>H. Salida</th><th>H. Entrega</th><th>Estado</th></tr></thead>
+        <tbody id="c-hist-tbody"></tbody>
+      </table>
+    </div>
+  `;
+
+  window._cadetesHistRows = CADETES_MOV_DATA;
+  filtrarCHistorial();
+}
+
+function filtrarCHistorial() {
+  const rows = window._cadetesHistRows || CADETES_MOV_DATA;
+  const search = (document.getElementById('c-search-hist')?.value || '').toLowerCase();
+  const fCadete = document.getElementById('c-filter-cadete')?.value || '';
+  const fEstado = document.getElementById('c-filter-estado')?.value || '';
+  const fFecha = document.getElementById('c-filter-fecha')?.value || '';
+  const tbody = document.getElementById('c-hist-tbody');
+  if (!tbody) return;
+
+  const estadoTag = {
+    PENDIENTE: '<span class="tag tag-yellow">Pend. retiro</span>',
+    EN_CAMINO: '<span class="tag tag-blue">En camino</span>',
+    ENTREGADO: '<span class="tag tag-green">✓ Entregado</span>',
+    NO_ENTREGADO: '<span class="tag tag-red">No entregado</span>',
+  };
+
+  const filtered = rows.filter(m => {
+    if (fCadete && m.cadete_id !== fCadete) return false;
+    if (fEstado && m.estado !== fEstado) return false;
+    if (fFecha && m.fecha !== fFecha) return false;
+    if (search) {
+      const cadete = CADETES_DATA.find(c => c.id === m.cadete_id);
+      const nombre = cadete ? `${cadete.nombre} ${cadete.apellido}`.toLowerCase() : '';
+      const dest = (m.destino_id ? destNombre(m.destino_id) : m.destino_libre || '').toLowerCase();
+      if (!nombre.includes(search) && !dest.includes(search) && !(m.articulos||'').toLowerCase().includes(search)) return false;
+    }
+    return true;
+  });
+
+  tbody.innerHTML = filtered.length ? filtered.map(m => {
+    const cadete = CADETES_DATA.find(c => c.id === m.cadete_id);
+    const nombreCadete = cadete ? `${cadete.nombre} ${cadete.apellido}` : '—';
+    const dest = m.destino_id ? destNombre(m.destino_id) : (m.destino_libre || '—');
+    return `
+      <tr>
+        <td style="font-family:var(--mono);font-size:11px">${fmtDate(m.fecha)}</td>
+        <td style="font-weight:500;color:var(--text)">${nombreCadete}</td>
+        <td>${dest}</td>
+        <td style="font-size:12px;color:var(--text2)">${m.articulos || '—'}</td>
+        <td style="font-family:var(--mono);font-size:11px">${m.hora_salida || '—'}</td>
+        <td style="font-family:var(--mono);font-size:11px">${m.hora_retorno || '—'}</td>
+        <td>${estadoTag[m.estado] || m.estado}</td>
+      </tr>
+    `;
+  }).join('') : `<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text3);font-family:var(--mono);font-size:11px">Sin registros</td></tr>`;
+}
+
+function exportarCadetesCSV() {
+  const rows = window._cadetesHistRows || CADETES_MOV_DATA;
+  let csv = 'Fecha,Cadete,Destino,Artículos,Hora Salida,Hora Entrega,Estado\n';
+  rows.forEach(m => {
+    const cadete = CADETES_DATA.find(c => c.id === m.cadete_id);
+    const nombre = cadete ? `${cadete.nombre} ${cadete.apellido}` : '—';
+    const dest = m.destino_id ? destNombre(m.destino_id) : (m.destino_libre || '');
+    csv += `${m.fecha},"${nombre}","${dest}","${m.articulos||''}",${m.hora_salida||''},${m.hora_retorno||''},${m.estado}\n`;
+  });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `cadetes_${HOY()}.csv`;
+  a.click();
+}
+
+// ── LISTA CADETES ──
+function renderCListaCadetes() {
+  const el = document.getElementById('cview-cadetes');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin:12px 0">
+      ${SESSION.rol !== 'solo_lectura' ? `<button class="btn btn-outline" onclick="abrirModalNuevoCadete()">+ Nuevo Cadete</button>` : ''}
+    </div>
+    <div class="panel">
+      <div class="panel-header"><div class="panel-title">CADETES REGISTRADOS</div></div>
+      <table class="data-table">
+        <thead><tr><th>Nombre</th><th>Teléfono</th><th>Tarifa por viaje</th><th>Entregas totales</th><th>Estado</th></tr></thead>
+        <tbody>
+          ${CADETES_DATA.map(c => {
+            const totalMovs = CADETES_MOV_DATA.filter(m => m.cadete_id === c.id).length;
+            return `
+              <tr>
+                <td style="font-weight:600;color:var(--text)">${c.nombre} ${c.apellido}</td>
+                <td style="font-family:var(--mono);font-size:11px">${c.telefono || '—'}</td>
+                <td style="font-family:var(--mono);font-size:11px;color:var(--accent)">${c.tarifa ? `$${Number(c.tarifa).toLocaleString('es-AR')}` : '<span style="color:var(--text3)">No definida</span>'}</td>
+                <td style="font-family:var(--mono);font-size:11px">${totalMovs}</td>
+                <td><span class="tag tag-green">ACTIVO</span></td>
+              </tr>
+            `;
+          }).join('')}
+          ${!CADETES_DATA.length ? `<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--text3);font-family:var(--mono);font-size:11px">No hay cadetes registrados</td></tr>` : ''}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ── MODAL NUEVA ENTREGA ──
+function abrirModalNuevaEntrega() {
+  let m = document.getElementById('modal-nueva-entrega');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal-nueva-entrega';
+    m.className = 'modal-overlay';
+    m.innerHTML = `
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title">+ Registrar Entrega</div>
+          <div class="modal-close" onclick="document.getElementById('modal-nueva-entrega').classList.remove('open')">✕</div>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Cadete *</label>
+              <select class="form-select" id="ne-cadete"></select>
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">Fecha *</label>
+              <input type="date" class="form-input" id="ne-fecha">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Destino</label>
+              <select class="form-select" id="ne-destino-sel" onchange="toggleDestinoLibre()"></select>
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">O destino libre</label>
+              <input type="text" class="form-input" id="ne-destino-libre" placeholder="Escribí si no está en la lista">
+            </div>
+          </div>
+          <div class="form-row single" style="margin-bottom:14px">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Artículos / Descripción *</label>
+              <textarea class="form-input" id="ne-articulos" rows="2" placeholder="Ej: Pedido farmacia Central — 3 cajas" style="resize:vertical"></textarea>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Hora de salida</label>
+              <input type="time" class="form-input" id="ne-hora-salida">
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">Estado inicial</label>
+              <select class="form-select" id="ne-estado">
+                <option value="PENDIENTE">Pendiente de retiro</option>
+                <option value="EN_CAMINO">Ya retiró — en camino</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row single" style="margin-bottom:0">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Observaciones</label>
+              <input type="text" class="form-input" id="ne-obs" placeholder="Opcional">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="document.getElementById('modal-nueva-entrega').classList.remove('open')">Cancelar</button>
+          <button class="btn btn-primary" onclick="confirmarNuevaEntrega()">Registrar →</button>
+        </div>
+      </div>`;
+    m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+    document.body.appendChild(m);
+  }
+
+  // Llenar cadetes
+  const selC = document.getElementById('ne-cadete');
+  selC.innerHTML = '<option value="">Seleccionar cadete...</option>';
+  CADETES_DATA.forEach(c => selC.innerHTML += `<option value="${c.id}">${c.nombre} ${c.apellido}</option>`);
+
+  // Llenar destinos
+  const selD = document.getElementById('ne-destino-sel');
+  selD.innerHTML = '<option value="">Seleccionar farmacia...</option>';
+  let lastZona = '';
+  DESTINOS_DATA.forEach(d => {
+    if (d.zona !== lastZona) { selD.innerHTML += `<optgroup label="── ${d.zona}">`; lastZona = d.zona; }
+    selD.innerHTML += `<option value="${d.id}">${d.nombre}</option>`;
+  });
+
+  document.getElementById('ne-fecha').value = HOY();
+  // Hora actual
+  const now = new Date();
+  document.getElementById('ne-hora-salida').value = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  document.getElementById('ne-articulos').value = '';
+  document.getElementById('ne-obs').value = '';
+  document.getElementById('ne-destino-libre').value = '';
+
+  m.classList.add('open');
+}
+
+function toggleDestinoLibre() {
+  const sel = document.getElementById('ne-destino-sel');
+  const libre = document.getElementById('ne-destino-libre');
+  if (sel.value) libre.value = '';
+}
+
+async function confirmarNuevaEntrega() {
+  const cadeteId = document.getElementById('ne-cadete').value;
+  const fecha = document.getElementById('ne-fecha').value;
+  const destinoId = document.getElementById('ne-destino-sel').value || null;
+  const destinoLibre = document.getElementById('ne-destino-libre').value.trim() || null;
+  const articulos = document.getElementById('ne-articulos').value.trim();
+  const horaSalida = document.getElementById('ne-hora-salida').value || null;
+  const estado = document.getElementById('ne-estado').value;
+  const obs = document.getElementById('ne-obs').value.trim() || null;
+
+  if (!cadeteId || !fecha || !articulos) { toast('⚠ Cadete, fecha y artículos son obligatorios', 'warn'); return; }
+  if (!destinoId && !destinoLibre) { toast('⚠ Seleccioná un destino o escribí uno libre', 'warn'); return; }
+
+  try {
+    const nueva = await sbPost('cadetes_movimientos', {
+      cadete_id: cadeteId, fecha, destino_id: destinoId,
+      destino_libre: destinoLibre, articulos, cantidad: 1,
+      hora_salida: horaSalida, estado, obs, creado_por: SESSION.id
+    });
+
+    await sbPost('auditoria', {
+      usuario_id: SESSION.id, username: SESSION.username,
+      accion: 'NUEVA_ENTREGA_CADETE', modulo: 'CADETES',
+      detalle: { cadete: cadeteId, destino: destinoId || destinoLibre }
+    });
+
+    document.getElementById('modal-nueva-entrega').classList.remove('open');
+    toast('✓ Entrega registrada', 'ok');
+
+    // Recargar
+    CADETES_MOV_DATA = await sbGet('cadetes_movimientos', 'order=fecha.desc,hora_salida.desc&select=id,cadete_id,fecha,destino_id,destino_libre,articulos,cantidad,hora_salida,hora_retorno,estado,obs,creado_en');
+    renderCKpis();
+    if (CADETES_TAB === 'hoy') renderCHoy();
+    if (CADETES_TAB === 'historial') { window._cadetesHistRows = CADETES_MOV_DATA; filtrarCHistorial(); }
+
+  } catch(e) {
+    toast(`⚠ Error: ${e.message}`, 'error');
+  }
+}
+
+// ── ACTUALIZAR ESTADO ──
+async function actualizarEstadoCadete(movId, nuevoEstado) {
+  try {
+    const update = { estado: nuevoEstado };
+    if (nuevoEstado === 'ENTREGADO' || nuevoEstado === 'NO_ENTREGADO') {
+      const now = new Date();
+      update.hora_retorno = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+    }
+    await sbPatch('cadetes_movimientos', `id=eq.${movId}`, update);
+
+    const labels = { EN_CAMINO: 'Retiró del depósito', ENTREGADO: 'Entrega confirmada', NO_ENTREGADO: 'Marcado como no entregado' };
+    toast(`✓ ${labels[nuevoEstado]}`, 'ok');
+
+    // Recargar
+    CADETES_MOV_DATA = await sbGet('cadetes_movimientos', 'order=fecha.desc,hora_salida.desc&select=id,cadete_id,fecha,destino_id,destino_libre,articulos,cantidad,hora_salida,hora_retorno,estado,obs,creado_en');
+    renderCKpis();
+    renderCHoy();
+  } catch(e) {
+    toast(`⚠ Error: ${e.message}`, 'error');
+  }
+}
+
+// ── MODAL NUEVO CADETE ──
+function abrirModalNuevoCadete() {
+  let m = document.getElementById('modal-nuevo-cadete');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal-nuevo-cadete';
+    m.className = 'modal-overlay';
+    m.innerHTML = `
+      <div class="modal" style="max-width:400px">
+        <div class="modal-header">
+          <div class="modal-title">+ Nuevo Cadete</div>
+          <div class="modal-close" onclick="document.getElementById('modal-nuevo-cadete').classList.remove('open')">✕</div>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Nombre *</label>
+              <input type="text" class="form-input" id="nc-nombre" placeholder="Juan">
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">Apellido *</label>
+              <input type="text" class="form-input" id="nc-apellido" placeholder="García">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Teléfono</label>
+              <input type="text" class="form-input" id="nc-tel" placeholder="358-XXXXXXX">
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">Tarifa por viaje ($)</label>
+              <input type="number" class="form-input" id="nc-tarifa" placeholder="0.00">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="document.getElementById('modal-nuevo-cadete').classList.remove('open')">Cancelar</button>
+          <button class="btn btn-primary" onclick="confirmarNuevoCadete()">Agregar Cadete</button>
+        </div>
+      </div>`;
+    m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+    document.body.appendChild(m);
+  }
+  ['nc-nombre','nc-apellido','nc-tel','nc-tarifa'].forEach(id => document.getElementById(id).value = '');
+  m.classList.add('open');
+}
+
+async function confirmarNuevoCadete() {
+  const nombre = document.getElementById('nc-nombre').value.trim();
+  const apellido = document.getElementById('nc-apellido').value.trim();
+  const telefono = document.getElementById('nc-tel').value.trim() || null;
+  const tarifa = document.getElementById('nc-tarifa').value || null;
+
+  if (!nombre || !apellido) { toast('⚠ Nombre y apellido son obligatorios', 'warn'); return; }
+
+  try {
+    await sbPost('cadetes', { nombre, apellido, telefono, tarifa, activo: true });
+    document.getElementById('modal-nuevo-cadete').classList.remove('open');
+    toast(`✓ Cadete ${nombre} ${apellido} agregado`, 'ok');
+
+    CADETES_DATA = await sbGet('cadetes', 'activo=eq.true&order=nombre.asc&select=id,nombre,apellido,telefono,tarifa');
+    renderCListaCadetes();
+  } catch(e) {
+    toast(`⚠ Error: ${e.message}`, 'error');
+  }
 }
 
 // ══════════════════════════════════════════════
