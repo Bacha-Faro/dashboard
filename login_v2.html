@@ -992,9 +992,12 @@ async function cargarTablaUsuarios() {
               <td>${rolTag[u.rol] || u.rol}</td>
               <td style="font-family:var(--mono);font-size:11px">${u.ultimo_acceso ? fmtDT(u.ultimo_acceso) : '—'}</td>
               <td>${u.activo ? '<span class="tag tag-green">ACTIVO</span>' : '<span class="tag tag-red">INACTIVO</span>'}</td>
-              <td>
+              <td style="display:flex;gap:6px;align-items:center">
                 ${u.username !== 'admin' && u.id !== SESSION.id
-                  ? `<button class="btn-danger-sm" onclick="toggleUsuario('${u.id}',${u.activo},'${u.nombre} ${u.apellido}')">${u.activo ? 'Desactivar' : 'Activar'}</button>`
+                  ? `
+                    <button class="btn-danger-sm" onclick="toggleUsuario('${u.id}',${u.activo},'${u.nombre} ${u.apellido}')">${u.activo ? 'Desactivar' : 'Activar'}</button>
+                    <button class="btn-danger-sm" style="border-color:rgba(255,71,87,.6);background:rgba(255,71,87,.08)" onclick="borrarUsuario('${u.id}','${u.nombre} ${u.apellido}','${u.username}')">🗑 Borrar</button>
+                  `
                   : '<span style="color:var(--text3);font-size:11px">—</span>'
                 }
               </td>
@@ -1041,6 +1044,31 @@ async function toggleUsuario(id, activo, nombre) {
     await cargarTablaUsuarios();
   } catch(e) {
     toast(`⚠ Error: ${e.message}`, 'error');
+  }
+}
+
+async function borrarUsuario(id, nombre, username) {
+  if (!confirm(`⚠ ¿Borrar definitivamente a ${nombre} (${username})?\n\nEsta acción no se puede deshacer.`)) return;
+  if (!confirm(`Confirmá nuevamente: ¿borrar a ${nombre}?`)) return;
+  try {
+    // Registrar en auditoría ANTES de borrar
+    await sbPost('auditoria', {
+      usuario_id: SESSION.id,
+      username: SESSION.username,
+      accion: 'BORRAR_USUARIO',
+      modulo: 'USUARIOS',
+      detalle: { usuario_borrado: username, nombre }
+    });
+    // Borrar usuario
+    const res = await fetch(`${SB_URL}/rest/v1/usuarios?id=eq.${id}`, {
+      method: 'DELETE',
+      headers: sbHeaders
+    });
+    if (!res.ok) throw new Error(`Error ${res.status}`);
+    toast(`✓ Usuario ${username} eliminado`, 'ok');
+    await cargarTablaUsuarios();
+  } catch(e) {
+    toast(`⚠ Error al borrar: ${e.message}`, 'error');
   }
 }
 
