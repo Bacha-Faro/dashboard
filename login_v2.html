@@ -282,7 +282,7 @@ body::after {
 }
 .btn-logout:hover { border-color: var(--red); color: var(--red); }
 
-.app-body { display: flex; flex: 1; overflow: hidden; height: calc(100vh - 54px); }
+.app-body { display: flex; flex: 1; overflow: hidden; height: calc(100vh - 54px); min-height: 0; }
 
 .sidebar {
   width: 220px;
@@ -333,8 +333,11 @@ body::after {
 .main-content {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 28px;
+  padding-bottom: 60px;
   background: var(--bg);
+  min-height: 0;
 }
 
 /* KPI */
