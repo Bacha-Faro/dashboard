@@ -3301,21 +3301,32 @@ function agregarBultoViaje(tipo) {
   if (!el) return;
   const destinosZona = DESTINOS_DATA.filter(d => d.zona === 'Zona');
   const destinosRC = DESTINOS_DATA.filter(d => d.zona === 'Rio Cuarto' || d.zona === 'Río Cuarto');
-  const div = document.createElement('div');
-  div.id = 'bulto-'+idx;
-  div.style.cssText = 'background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:12px;margin-bottom:8px;position:relative';
+
   const destOpts = tipo === 'ENVIO'
-    ? '<option value="">Seleccionar sucursal zona...</option>'+destinosZona.map(d=>'<option value="'+d.id+'">'+d.nombre+'</option>').join('')
-    : '<option value="">Para drogueria (sin redistribucion)</option><optgroup label="Redistribuir a RC">'+destinosRC.map(d=>'<option value="'+d.id+'">'+d.nombre+'</option>').join('')+'</optgroup>';
-  div.innerHTML = '<button onclick="document.getElementById('bulto-'+idx+'').remove()" style="position:absolute;top:8px;right:8px;background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px">✕</button>'
-    +'<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:8px">'
-    +'<div class="form-group-inner"><label class="form-label-inner">'+(tipo==='ENVIO'?'Destino zona':'Destino final RC')+'</label>'
-    +'<select class="form-select" id="bd-dest-'+idx+'">'+destOpts+'</select></div>'
-    +'<div class="form-group-inner"><label class="form-label-inner">Cant. bultos</label>'
-    +'<input type="number" min="1" value="1" class="form-input" id="bd-cant-'+idx+'" style="text-align:center"></div></div>'
-    +'<div class="form-group-inner"><label class="form-label-inner">Contenido / Descripcion</label>'
-    +'<input type="text" class="form-input" id="bd-cont-'+idx+'" placeholder="Medicamentos, Documentacion..."></div>'
-    +'<input type="hidden" id="bd-tipo-'+idx+'" value="'+tipo+'">';
+    ? '<option value="">Seleccionar sucursal zona...</option>' + destinosZona.map(d => `<option value="${d.id}">${d.nombre}</option>`).join('')
+    : '<option value="">Para droguería (sin redistribución)</option><optgroup label="Redistribuir a RC">' + destinosRC.map(d => `<option value="${d.id}">${d.nombre}</option>`).join('') + '</optgroup>';
+
+  const div = document.createElement('div');
+  div.id = `bulto-${idx}`;
+  div.style.cssText = 'background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:12px;margin-bottom:8px;position:relative';
+  div.innerHTML = `
+    <button onclick="document.getElementById('bulto-${idx}').remove()" style="position:absolute;top:8px;right:8px;background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px">✕</button>
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:8px">
+      <div class="form-group-inner">
+        <label class="form-label-inner">${tipo === 'ENVIO' ? 'Destino zona' : 'Destino final RC'}</label>
+        <select class="form-select" id="bd-dest-${idx}">${destOpts}</select>
+      </div>
+      <div class="form-group-inner">
+        <label class="form-label-inner">Cant. bultos</label>
+        <input type="number" min="1" value="1" class="form-input" id="bd-cant-${idx}" style="text-align:center">
+      </div>
+    </div>
+    <div class="form-group-inner">
+      <label class="form-label-inner">Contenido / Descripción</label>
+      <input type="text" class="form-input" id="bd-cont-${idx}" placeholder="Medicamentos, Documentación...">
+    </div>
+    <input type="hidden" id="bd-tipo-${idx}" value="${tipo}">
+  `;
   el.appendChild(div);
 }
 
