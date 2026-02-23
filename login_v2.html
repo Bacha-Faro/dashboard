@@ -856,6 +856,7 @@ function navTo(page, el) {
     cadetes:        () => renderCadetes(mc),
     temperatura:    () => renderTemperatura(mc),
     comisionistas:  () => renderComisionistas(mc),
+    proveedores:    () => renderProveedores(mc),
   };
   if (pages[page]) pages[page]();
   else renderPlaceholder(mc, page);
@@ -3346,6 +3347,621 @@ async function confirmarNuevoViaje() {
     ]);
     renderCOMKpis(); renderCOMMovimientos();
   } catch(e) { toast('Error: '+e.message,'error'); }
+}
+
+
+
+// ══════════════════════════════════════════════
+//  MÓDULO PROVEEDORES
+// ══════════════════════════════════════════════
+
+let PROVEEDORES_DATA = [];
+let PROV_INGRESOS_DATA = [];
+let PROV_TAB = 'hoy';
+
+async function renderProveedores(el) {
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;margin-bottom:2px">Recepción de Proveedores</h2>
+        <p style="color:var(--text3);font-family:var(--mono);font-size:11px">// CONTROL DE INGRESOS Y DEVOLUCIONES</p>
+      </div>
+      <div style="display:flex;gap:10px">
+        ${SESSION.rol !== 'solo_lectura' ? `
+          <button class="btn btn-outline" onclick="abrirModalNuevoProveedor()">+ Proveedor</button>
+          <button class="btn btn-primary" onclick="abrirModalNuevoIngreso()">+ Registrar Ingreso</button>
+        ` : ''}
+      </div>
+    </div>
+
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin:16px -28px 0;padding:0 28px;">
+      <div class="b-tab active" id="provtab-hoy" onclick="switchPROVTab('hoy')">HOY</div>
+      <div class="b-tab" id="provtab-historial" onclick="switchPROVTab('historial')">HISTORIAL</div>
+      <div class="b-tab" id="provtab-devoluciones" onclick="switchPROVTab('devoluciones')">DEVOLUCIONES</div>
+      <div class="b-tab" id="provtab-proveedores" onclick="switchPROVTab('proveedores')">PROVEEDORES</div>
+    </div>
+
+    <div class="kpi-grid" style="margin-top:20px">
+      <div class="kpi-card blue"><div class="kpi-label">// INGRESOS HOY</div><div class="kpi-value" id="provkpi-hoy">…</div><div class="kpi-sub">recepciones</div></div>
+      <div class="kpi-card green"><div class="kpi-label">// BULTOS RECIBIDOS</div><div class="kpi-value" id="provkpi-bultos">…</div><div class="kpi-sub">hoy</div></div>
+      <div class="kpi-card yellow"><div class="kpi-label">// CADENA DE FRÍO</div><div class="kpi-value" id="provkpi-frio">…</div><div class="kpi-sub">ingresos hoy</div></div>
+      <div class="kpi-card red"><div class="kpi-label">// CON DIFERENCIAS</div><div class="kpi-value" id="provkpi-dif">…</div><div class="kpi-sub">hoy</div></div>
+    </div>
+
+    <div id="provview-hoy"></div>
+    <div id="provview-historial" style="display:none"></div>
+    <div id="provview-devoluciones" style="display:none"></div>
+    <div id="provview-proveedores" style="display:none"></div>
+  `;
+
+  try {
+    [PROVEEDORES_DATA, PROV_INGRESOS_DATA] = await Promise.all([
+      sbGet('proveedores', 'activo=eq.true&order=nombre.asc&select=id,nombre,contacto,telefono'),
+      sbGet('proveedores_ingresos', 'order=fecha.desc,hora.desc&limit=500&select=id,proveedor_id,proveedor_libre,fecha,hora,remito,bultos_pedidos,bultos_recibidos,cadena_frio,estado,obs,registrado_por'),
+    ]);
+    renderPROVKpis();
+    renderPROVHoy();
+  } catch(e) {
+    el.innerHTML += `<div style="color:var(--red);font-family:var(--mono);font-size:12px;margin-top:16px">Error: ${e.message}</div>`;
+  }
+}
+
+function switchPROVTab(tab) {
+  PROV_TAB = tab;
+  ['hoy','historial','devoluciones','proveedores'].forEach(t => {
+    document.getElementById('provtab-'+t)?.classList.toggle('active', t === tab);
+    const v = document.getElementById('provview-'+t);
+    if (v) v.style.display = t === tab ? 'block' : 'none';
+  });
+  if (tab === 'hoy') renderPROVHoy();
+  if (tab === 'historial') renderPROVHistorial();
+  if (tab === 'devoluciones') renderPROVDevoluciones();
+  if (tab === 'proveedores') renderPROVListado();
+}
+
+function provNombre(ingreso) {
+  if (ingreso.proveedor_id) {
+    const p = PROVEEDORES_DATA.find(x => x.id === ingreso.proveedor_id);
+    return p ? p.nombre : '—';
+  }
+  return ingreso.proveedor_libre || '—';
+}
+
+function renderPROVKpis() {
+  const hoy = HOY();
+  const deHoy = PROV_INGRESOS_DATA.filter(i => i.fecha === hoy);
+  const bultos = deHoy.reduce((a,i) => a+(i.bultos_recibidos||0), 0);
+  const frio = deHoy.filter(i => i.cadena_frio).length;
+  const dif = deHoy.filter(i => i.estado !== 'CONFORME').length;
+  document.getElementById('provkpi-hoy').textContent = deHoy.length;
+  document.getElementById('provkpi-bultos').textContent = bultos;
+  document.getElementById('provkpi-frio').textContent = frio;
+  document.getElementById('provkpi-dif').textContent = dif;
+  if (dif > 0) document.getElementById('provkpi-dif').style.color = 'var(--red)';
+}
+
+function renderPROVHoy() {
+  const el = document.getElementById('provview-hoy');
+  if (!el) return;
+  const hoy = HOY();
+  const deHoy = PROV_INGRESOS_DATA.filter(i => i.fecha === hoy);
+
+  if (!deHoy.length) {
+    el.innerHTML = `<div style="text-align:center;padding:48px;color:var(--text3);font-family:var(--mono);font-size:12px">SIN INGRESOS REGISTRADOS HOY<br><span style="font-size:10px;margin-top:8px;display:block">Usá "+ Registrar Ingreso" para agregar</span></div>`;
+    return;
+  }
+
+  const estadoTag = {
+    CONFORME: '<span class="tag tag-green">✓ Conforme</span>',
+    BULTO_DANADO: '<span class="tag tag-red">⚠ Bulto dañado</span>',
+    DIFERENCIA_BULTOS: '<span class="tag tag-yellow">⚠ Diferencia bultos</span>',
+    PENDIENTE: '<span class="tag tag-blue">Pendiente revisión</span>',
+  };
+
+  el.innerHTML = `
+    <div class="panel" style="margin-top:12px">
+      <div class="panel-header"><div class="panel-title">INGRESOS DE HOY — ${fmtDate(hoy)}</div></div>
+      <table class="data-table">
+        <thead><tr><th>Hora</th><th>Proveedor</th><th>Remito / Factura</th><th>Bultos</th><th>Frío</th><th>Estado</th><th>Obs</th></tr></thead>
+        <tbody>
+          ${deHoy.map(i => {
+            const difBultos = i.bultos_pedidos && i.bultos_recibidos !== i.bultos_pedidos;
+            return `<tr>
+              <td style="font-family:var(--mono);font-weight:600;color:var(--accent)">${i.hora || '—'}</td>
+              <td style="font-weight:600;color:var(--text)">${provNombre(i)}</td>
+              <td style="font-family:var(--mono);font-size:11px;color:var(--text2)">${i.remito || '—'}</td>
+              <td style="font-family:var(--mono)">
+                ${i.bultos_recibidos}
+                ${i.bultos_pedidos ? `<span style="color:${difBultos?'var(--red)':'var(--text3)'}"> / ${i.bultos_pedidos} ped.</span>` : ''}
+              </td>
+              <td style="text-align:center">${i.cadena_frio ? '<span style="color:var(--accent)">❄️</span>' : '—'}</td>
+              <td>${estadoTag[i.estado] || i.estado}</td>
+              <td style="font-size:11px;color:var(--text3);max-width:200px">${i.obs || '—'}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function renderPROVHistorial() {
+  const el = document.getElementById('provview-historial');
+  if (!el) return;
+
+  const estadoTag = {
+    CONFORME: '<span class="tag tag-green">Conforme</span>',
+    BULTO_DANADO: '<span class="tag tag-red">Bulto dañado</span>',
+    DIFERENCIA_BULTOS: '<span class="tag tag-yellow">Dif. bultos</span>',
+    PENDIENTE: '<span class="tag tag-blue">Pendiente</span>',
+  };
+
+  el.innerHTML = `
+    <div style="display:flex;gap:10px;margin:12px 0;flex-wrap:wrap">
+      <select id="prov-f-prov" onchange="filtrarPROVHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="">Todos los proveedores</option>
+        ${PROVEEDORES_DATA.map(p => `<option value="${p.id}">${p.nombre}</option>`).join('')}
+      </select>
+      <select id="prov-f-estado" onchange="filtrarPROVHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="">Todos los estados</option>
+        <option value="CONFORME">Conforme</option>
+        <option value="BULTO_DANADO">Bulto dañado</option>
+        <option value="DIFERENCIA_BULTOS">Diferencia bultos</option>
+      </select>
+      <input type="date" id="prov-f-desde" onchange="filtrarPROVHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+      <input type="date" id="prov-f-hasta" onchange="filtrarPROVHistorial()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+      <label style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--text2);cursor:pointer">
+        <input type="checkbox" id="prov-f-frio" onchange="filtrarPROVHistorial()"> Solo cadena de frío
+      </label>
+      <button class="btn btn-outline btn-sm" onclick="exportarPROVCSV()">⬇ Exportar</button>
+    </div>
+    <div class="panel">
+      <table class="data-table">
+        <thead><tr><th>Fecha</th><th>Hora</th><th>Proveedor</th><th>Remito</th><th>Bultos rec.</th><th>Bultos ped.</th><th>Frío</th><th>Estado</th><th>Obs</th></tr></thead>
+        <tbody id="prov-hist-tbody"></tbody>
+      </table>
+    </div>`;
+
+  filtrarPROVHistorial();
+}
+
+function filtrarPROVHistorial() {
+  const fProv = document.getElementById('prov-f-prov')?.value || '';
+  const fEstado = document.getElementById('prov-f-estado')?.value || '';
+  const fDesde = document.getElementById('prov-f-desde')?.value || '';
+  const fHasta = document.getElementById('prov-f-hasta')?.value || '';
+  const fFrio = document.getElementById('prov-f-frio')?.checked || false;
+  const tbody = document.getElementById('prov-hist-tbody');
+  if (!tbody) return;
+
+  const estadoTag = {
+    CONFORME: '<span class="tag tag-green">Conforme</span>',
+    BULTO_DANADO: '<span class="tag tag-red">Bulto dañado</span>',
+    DIFERENCIA_BULTOS: '<span class="tag tag-yellow">Dif. bultos</span>',
+    PENDIENTE: '<span class="tag tag-blue">Pendiente</span>',
+  };
+
+  const filtered = PROV_INGRESOS_DATA.filter(i => {
+    if (fProv && i.proveedor_id !== fProv) return false;
+    if (fEstado && i.estado !== fEstado) return false;
+    if (fDesde && i.fecha < fDesde) return false;
+    if (fHasta && i.fecha > fHasta) return false;
+    if (fFrio && !i.cadena_frio) return false;
+    return true;
+  });
+
+  tbody.innerHTML = filtered.length ? filtered.map(i => {
+    const difBultos = i.bultos_pedidos && i.bultos_recibidos !== i.bultos_pedidos;
+    return `<tr>
+      <td style="font-family:var(--mono);font-size:11px">${fmtDate(i.fecha)}</td>
+      <td style="font-family:var(--mono);font-size:11px">${i.hora || '—'}</td>
+      <td style="font-weight:500;color:var(--text)">${provNombre(i)}</td>
+      <td style="font-family:var(--mono);font-size:11px">${i.remito || '—'}</td>
+      <td style="font-family:var(--mono);color:${difBultos?'var(--red)':'var(--text)'}">${i.bultos_recibidos}</td>
+      <td style="font-family:var(--mono);color:var(--text2)">${i.bultos_pedidos || '—'}</td>
+      <td style="text-align:center">${i.cadena_frio ? '❄️' : '—'}</td>
+      <td>${estadoTag[i.estado] || i.estado}</td>
+      <td style="font-size:11px;color:var(--text3)">${i.obs || '—'}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text3);font-family:var(--mono);font-size:11px">Sin registros</td></tr>`;
+}
+
+function exportarPROVCSV() {
+  let csv = 'Fecha,Hora,Proveedor,Remito,Bultos Recibidos,Bultos Pedidos,Cadena Frio,Estado,Obs\n';
+  PROV_INGRESOS_DATA.forEach(i => {
+    csv += `${i.fecha},${i.hora||''},"${provNombre(i)}","${i.remito||''}",${i.bultos_recibidos},${i.bultos_pedidos||''},${i.cadena_frio?'SI':'NO'},${i.estado},"${i.obs||''}"\n`;
+  });
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'proveedores_'+HOY()+'.csv'; a.click();
+}
+
+function renderPROVDevoluciones() {
+  const el = document.getElementById('provview-devoluciones');
+  if (!el) return;
+  el.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin:12px 0">
+      ${SESSION.rol !== 'solo_lectura' ? `<button class="btn btn-primary" onclick="abrirModalDevolucion()">+ Registrar Devolución</button>` : ''}
+    </div>
+    <div id="prov-dev-list"><div style="text-align:center;padding:48px;color:var(--text3);font-family:var(--mono);font-size:12px">Cargando...</div></div>`;
+  cargarDevoluciones();
+}
+
+async function cargarDevoluciones() {
+  try {
+    const devs = await sbGet('proveedores_egresos', 'order=fecha.desc&select=id,proveedor_id,proveedor_libre,fecha,remito,bultos,motivo,obs,registrado_por');
+    const el = document.getElementById('prov-dev-list');
+    if (!el) return;
+    if (!devs.length) {
+      el.innerHTML = `<div style="text-align:center;padding:48px;color:var(--text3);font-family:var(--mono);font-size:12px">SIN DEVOLUCIONES REGISTRADAS</div>`;
+      return;
+    }
+    const motivoTag = {
+      DANADO: '<span class="tag tag-red">Dañado</span>',
+      VENCIDO: '<span class="tag tag-red">Vencido</span>',
+      ERROR_PEDIDO: '<span class="tag tag-yellow">Error pedido</span>',
+      EXCEDENTE: '<span class="tag tag-blue">Excedente</span>',
+      OTRO: '<span class="tag tag-blue">Otro</span>',
+    };
+    el.innerHTML = `<div class="panel">
+      <div class="panel-header"><div class="panel-title">DEVOLUCIONES A PROVEEDORES</div></div>
+      <table class="data-table">
+        <thead><tr><th>Fecha</th><th>Proveedor</th><th>Remito / Ref.</th><th>Bultos</th><th>Motivo</th><th>Obs</th></tr></thead>
+        <tbody>
+          ${devs.map(d => `<tr>
+            <td style="font-family:var(--mono);font-size:11px">${fmtDate(d.fecha)}</td>
+            <td style="font-weight:500;color:var(--text)">${d.proveedor_id ? (PROVEEDORES_DATA.find(p=>p.id===d.proveedor_id)?.nombre||'—') : (d.proveedor_libre||'—')}</td>
+            <td style="font-family:var(--mono);font-size:11px">${d.remito||'—'}</td>
+            <td style="font-family:var(--mono)">${d.bultos||'—'}</td>
+            <td>${motivoTag[d.motivo]||d.motivo||'—'}</td>
+            <td style="font-size:11px;color:var(--text3)">${d.obs||'—'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  } catch(e) {
+    document.getElementById('prov-dev-list').innerHTML = `<div style="color:var(--red);font-family:var(--mono);font-size:12px">Error: ${e.message}</div>`;
+  }
+}
+
+function renderPROVListado() {
+  const el = document.getElementById('provview-proveedores');
+  if (!el) return;
+  el.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin:12px 0">
+      ${SESSION.rol !== 'solo_lectura' ? `<button class="btn btn-outline" onclick="abrirModalNuevoProveedor()">+ Nuevo Proveedor</button>` : ''}
+    </div>
+    <div class="panel">
+      <div class="panel-header"><div class="panel-title">PROVEEDORES REGISTRADOS</div></div>
+      <table class="data-table">
+        <thead><tr><th>Proveedor</th><th>Contacto</th><th>Teléfono</th><th>Ingresos totales</th></tr></thead>
+        <tbody>
+          ${PROVEEDORES_DATA.map(p => {
+            const ingresos = PROV_INGRESOS_DATA.filter(i => i.proveedor_id === p.id).length;
+            return `<tr>
+              <td style="font-weight:600;color:var(--text)">${p.nombre}</td>
+              <td style="color:var(--text2)">${p.contacto||'—'}</td>
+              <td style="font-family:var(--mono);font-size:11px">${p.telefono||'—'}</td>
+              <td style="font-family:var(--mono)">${ingresos}</td>
+            </tr>`;
+          }).join('')}
+          ${!PROVEEDORES_DATA.length ? `<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text3);font-family:var(--mono);font-size:11px">No hay proveedores. Agregá el primero con "+ Nuevo Proveedor"</td></tr>` : ''}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// ── MODAL INGRESO ──
+function abrirModalNuevoIngreso() {
+  let m = document.getElementById('modal-nuevo-ingreso');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal-nuevo-ingreso';
+    m.className = 'modal-overlay';
+    m.innerHTML = `<div class="modal" style="max-width:520px">
+      <div class="modal-header">
+        <div class="modal-title">📦 Registrar Ingreso de Proveedor</div>
+        <div class="modal-close" onclick="document.getElementById('modal-nuevo-ingreso').classList.remove('open')">✕</div>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Proveedor *</label>
+            <select class="form-select" id="ni-prov" onchange="toggleProvLibre()">
+              <option value="">Seleccionar...</option>
+              ${PROVEEDORES_DATA.map(p => `<option value="${p.id}">${p.nombre}</option>`).join('')}
+              <option value="__nuevo__">+ Escribir nombre nuevo</option>
+            </select>
+          </div>
+          <div class="form-group-inner" id="ni-prov-libre-wrap" style="display:none">
+            <label class="form-label-inner">Nombre del proveedor</label>
+            <input type="text" class="form-input" id="ni-prov-libre" placeholder="Nombre del proveedor">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Fecha *</label>
+            <input type="date" class="form-input" id="ni-fecha">
+          </div>
+          <div class="form-group-inner">
+            <label class="form-label-inner">Hora</label>
+            <input type="time" class="form-input" id="ni-hora">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Remito / Factura</label>
+            <input type="text" class="form-input" id="ni-remito" placeholder="Nro. de remito o factura">
+          </div>
+          <div class="form-group-inner">
+            <label class="form-label-inner">Estado de recepción *</label>
+            <select class="form-select" id="ni-estado">
+              <option value="CONFORME">✓ Conforme</option>
+              <option value="BULTO_DANADO">⚠ Bulto dañado</option>
+              <option value="DIFERENCIA_BULTOS">⚠ Diferencia de bultos</option>
+              <option value="PENDIENTE">Pendiente revisión</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Bultos recibidos *</label>
+            <input type="number" min="0" class="form-input" id="ni-bultos-rec" placeholder="0" style="text-align:center">
+          </div>
+          <div class="form-group-inner">
+            <label class="form-label-inner">Bultos pedidos (opcional)</label>
+            <input type="number" min="0" class="form-input" id="ni-bultos-ped" placeholder="0" style="text-align:center">
+          </div>
+        </div>
+        <div class="form-row single" style="margin-bottom:12px">
+          <div class="form-group-inner">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-family:var(--mono);font-size:11px;color:var(--text2)">
+              <input type="checkbox" id="ni-frio" style="width:16px;height:16px;accent-color:var(--accent)">
+              ❄️ Viene con cadena de frío
+            </label>
+          </div>
+        </div>
+        <div class="form-row single" style="margin-bottom:0">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Observaciones</label>
+            <textarea class="form-input" id="ni-obs" rows="2" placeholder="Ej: Bulto 3 llegó abierto, faltaron 2 unidades del ítem X..." style="resize:vertical"></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="document.getElementById('modal-nuevo-ingreso').classList.remove('open')">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarNuevoIngreso()">Registrar Ingreso →</button>
+      </div>
+    </div>`;
+    m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); });
+    document.body.appendChild(m);
+  }
+
+  // Reset
+  document.getElementById('ni-prov').innerHTML = '<option value="">Seleccionar...</option>' +
+    PROVEEDORES_DATA.map(p => `<option value="${p.id}">${p.nombre}</option>`).join('') +
+    '<option value="__nuevo__">+ Escribir nombre nuevo</option>';
+  document.getElementById('ni-fecha').value = HOY();
+  const now = new Date();
+  document.getElementById('ni-hora').value = String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+  document.getElementById('ni-remito').value = '';
+  document.getElementById('ni-estado').value = 'CONFORME';
+  document.getElementById('ni-bultos-rec').value = '';
+  document.getElementById('ni-bultos-ped').value = '';
+  document.getElementById('ni-frio').checked = false;
+  document.getElementById('ni-obs').value = '';
+  document.getElementById('ni-prov-libre-wrap').style.display = 'none';
+  m.classList.add('open');
+}
+
+function toggleProvLibre() {
+  const sel = document.getElementById('ni-prov').value;
+  document.getElementById('ni-prov-libre-wrap').style.display = sel === '__nuevo__' ? 'flex' : 'none';
+}
+
+async function confirmarNuevoIngreso() {
+  const provSel = document.getElementById('ni-prov').value;
+  const provLibre = document.getElementById('ni-prov-libre')?.value.trim() || null;
+  const fecha = document.getElementById('ni-fecha').value;
+  const hora = document.getElementById('ni-hora').value || null;
+  const remito = document.getElementById('ni-remito').value.trim() || null;
+  const estado = document.getElementById('ni-estado').value;
+  const bultosRec = parseInt(document.getElementById('ni-bultos-rec').value || '0');
+  const bultosPed = document.getElementById('ni-bultos-ped').value ? parseInt(document.getElementById('ni-bultos-ped').value) : null;
+  const frio = document.getElementById('ni-frio').checked;
+  const obs = document.getElementById('ni-obs').value.trim() || null;
+
+  if (!provSel || !fecha || !bultosRec) { toast('⚠ Proveedor, fecha y bultos son obligatorios', 'warn'); return; }
+  if (provSel === '__nuevo__' && !provLibre) { toast('⚠ Escribí el nombre del proveedor', 'warn'); return; }
+
+  const provId = provSel !== '__nuevo__' ? provSel : null;
+  const provNombreLibre = provSel === '__nuevo__' ? provLibre : null;
+
+  try {
+    await sbPost('proveedores_ingresos', {
+      proveedor_id: provId, proveedor_libre: provNombreLibre,
+      fecha, hora, remito, estado,
+      bultos_recibidos: bultosRec, bultos_pedidos: bultosPed,
+      cadena_frio: frio, obs, registrado_por: SESSION.id
+    });
+
+    await sbPost('auditoria', {
+      usuario_id: SESSION.id, username: SESSION.username,
+      accion: 'INGRESO_PROVEEDOR', modulo: 'PROVEEDORES',
+      detalle: { proveedor: provId || provNombreLibre, bultos: bultosRec }
+    });
+
+    document.getElementById('modal-nuevo-ingreso').classList.remove('open');
+    toast('✓ Ingreso registrado', 'ok');
+
+    PROV_INGRESOS_DATA = await sbGet('proveedores_ingresos', 'order=fecha.desc,hora.desc&limit=500&select=id,proveedor_id,proveedor_libre,fecha,hora,remito,bultos_pedidos,bultos_recibidos,cadena_frio,estado,obs,registrado_por');
+    renderPROVKpis();
+    if (PROV_TAB === 'hoy') renderPROVHoy();
+    if (PROV_TAB === 'historial') { renderPROVHistorial(); }
+  } catch(e) {
+    toast('⚠ Error: '+e.message, 'error');
+  }
+}
+
+// ── MODAL DEVOLUCIÓN ──
+function abrirModalDevolucion() {
+  let m = document.getElementById('modal-devolucion');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal-devolucion';
+    m.className = 'modal-overlay';
+    m.innerHTML = `<div class="modal" style="max-width:480px">
+      <div class="modal-header">
+        <div class="modal-title">↩ Registrar Devolución</div>
+        <div class="modal-close" onclick="document.getElementById('modal-devolucion').classList.remove('open')">✕</div>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Proveedor *</label>
+            <select class="form-select" id="dev-prov" onchange="toggleDevProvLibre()">
+              <option value="">Seleccionar...</option>
+              ${PROVEEDORES_DATA.map(p => `<option value="${p.id}">${p.nombre}</option>`).join('')}
+              <option value="__nuevo__">+ Escribir nombre</option>
+            </select>
+          </div>
+          <div class="form-group-inner" id="dev-prov-libre-wrap" style="display:none">
+            <label class="form-label-inner">Nombre</label>
+            <input type="text" class="form-input" id="dev-prov-libre" placeholder="Proveedor">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Fecha *</label>
+            <input type="date" class="form-input" id="dev-fecha">
+          </div>
+          <div class="form-group-inner">
+            <label class="form-label-inner">Cant. bultos *</label>
+            <input type="number" min="1" class="form-input" id="dev-bultos" placeholder="0" style="text-align:center">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Remito / Referencia</label>
+            <input type="text" class="form-input" id="dev-remito" placeholder="Opcional">
+          </div>
+          <div class="form-group-inner">
+            <label class="form-label-inner">Motivo *</label>
+            <select class="form-select" id="dev-motivo">
+              <option value="DANADO">Dañado</option>
+              <option value="VENCIDO">Vencido</option>
+              <option value="ERROR_PEDIDO">Error en pedido</option>
+              <option value="EXCEDENTE">Excedente</option>
+              <option value="OTRO">Otro</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row single" style="margin-bottom:0">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Observaciones</label>
+            <textarea class="form-input" id="dev-obs" rows="2" style="resize:vertical" placeholder="Detalle adicional..."></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="document.getElementById('modal-devolucion').classList.remove('open')">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarDevolucion()">Registrar Devolución →</button>
+      </div>
+    </div>`;
+    m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); });
+    document.body.appendChild(m);
+  }
+  document.getElementById('dev-fecha').value = HOY();
+  document.getElementById('dev-bultos').value = '';
+  document.getElementById('dev-remito').value = '';
+  document.getElementById('dev-obs').value = '';
+  m.classList.add('open');
+}
+
+function toggleDevProvLibre() {
+  const sel = document.getElementById('dev-prov').value;
+  document.getElementById('dev-prov-libre-wrap').style.display = sel === '__nuevo__' ? 'flex' : 'none';
+}
+
+async function confirmarDevolucion() {
+  const provSel = document.getElementById('dev-prov').value;
+  const provLibre = document.getElementById('dev-prov-libre')?.value.trim() || null;
+  const fecha = document.getElementById('dev-fecha').value;
+  const bultos = parseInt(document.getElementById('dev-bultos').value || '0');
+  const remito = document.getElementById('dev-remito').value.trim() || null;
+  const motivo = document.getElementById('dev-motivo').value;
+  const obs = document.getElementById('dev-obs').value.trim() || null;
+
+  if (!provSel || !fecha || !bultos) { toast('⚠ Proveedor, fecha y bultos son obligatorios', 'warn'); return; }
+
+  try {
+    await sbPost('proveedores_egresos', {
+      proveedor_id: provSel !== '__nuevo__' ? provSel : null,
+      proveedor_libre: provSel === '__nuevo__' ? provLibre : null,
+      fecha, bultos, remito, motivo, obs, registrado_por: SESSION.id
+    });
+    document.getElementById('modal-devolucion').classList.remove('open');
+    toast('✓ Devolución registrada', 'ok');
+    cargarDevoluciones();
+  } catch(e) {
+    toast('⚠ Error: '+e.message, 'error');
+  }
+}
+
+// ── MODAL NUEVO PROVEEDOR ──
+function abrirModalNuevoProveedor() {
+  let m = document.getElementById('modal-nuevo-prov');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal-nuevo-prov';
+    m.className = 'modal-overlay';
+    m.innerHTML = `<div class="modal" style="max-width:400px">
+      <div class="modal-header">
+        <div class="modal-title">+ Nuevo Proveedor</div>
+        <div class="modal-close" onclick="document.getElementById('modal-nuevo-prov').classList.remove('open')">✕</div>
+      </div>
+      <div class="modal-body">
+        <div class="form-row single" style="margin-bottom:12px">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Nombre del proveedor *</label>
+            <input type="text" class="form-input" id="np-nombre" placeholder="Ej: Laboratorio Bayer">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Contacto</label>
+            <input type="text" class="form-input" id="np-contacto" placeholder="Nombre del contacto">
+          </div>
+          <div class="form-group-inner">
+            <label class="form-label-inner">Teléfono</label>
+            <input type="text" class="form-input" id="np-tel" placeholder="Tel. / WhatsApp">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="document.getElementById('modal-nuevo-prov').classList.remove('open')">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarNuevoProveedor()">Agregar</button>
+      </div>
+    </div>`;
+    m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); });
+    document.body.appendChild(m);
+  }
+  ['np-nombre','np-contacto','np-tel'].forEach(id => document.getElementById(id).value = '');
+  m.classList.add('open');
+}
+
+async function confirmarNuevoProveedor() {
+  const nombre = document.getElementById('np-nombre').value.trim();
+  const contacto = document.getElementById('np-contacto').value.trim() || null;
+  const telefono = document.getElementById('np-tel').value.trim() || null;
+  if (!nombre) { toast('⚠ El nombre es obligatorio', 'warn'); return; }
+  try {
+    await sbPost('proveedores', { nombre, contacto, telefono, activo: true });
+    document.getElementById('modal-nuevo-prov').classList.remove('open');
+    toast('✓ Proveedor '+nombre+' agregado', 'ok');
+    PROVEEDORES_DATA = await sbGet('proveedores', 'activo=eq.true&order=nombre.asc&select=id,nombre,contacto,telefono');
+    if (PROV_TAB === 'proveedores') renderPROVListado();
+  } catch(e) {
+    toast('⚠ Error: '+e.message, 'error');
+  }
 }
 
 
