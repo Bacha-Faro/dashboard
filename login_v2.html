@@ -864,6 +864,7 @@ function navTo(page, el) {
     temperatura:    () => renderTemperatura(mc),
     comisionistas:  () => renderComisionistas(mc),
     proveedores:    () => renderProveedores(mc),
+    diferencias:    () => renderDiferencias(mc),
   };
   if (pages[page]) pages[page]();
   else renderPlaceholder(mc, page);
@@ -3982,6 +3983,348 @@ async function confirmarNuevoProveedor() {
   }
 }
 
+
+
+// ══════════════════════════════════════════════
+//  MÓDULO DIFERENCIAS
+// ══════════════════════════════════════════════
+
+let DIF_DATA = [];
+let DIF_TAB = 'pendientes';
+
+async function renderDiferencias(el) {
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;margin-bottom:2px">Diferencias de Stock</h2>
+        <p style="color:var(--text3);font-family:var(--mono);font-size:11px">// CONTROL DE FALTANTES Y DIFERENCIAS EN PEDIDOS</p>
+      </div>
+      <div style="display:flex;gap:10px">
+        ${SESSION.rol !== 'solo_lectura' ? `<button class="btn btn-primary" onclick="abrirModalNuevaDif()">+ Registrar Diferencia</button>` : ''}
+      </div>
+    </div>
+
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin:16px -28px 0;padding:0 28px;">
+      <div class="b-tab active" id="diftab-pendientes" onclick="switchDIFTab('pendientes')">PENDIENTES</div>
+      <div class="b-tab" id="diftab-todas" onclick="switchDIFTab('todas')">TODAS</div>
+      <div class="b-tab" id="diftab-resueltas" onclick="switchDIFTab('resueltas')">RESUELTAS</div>
+    </div>
+
+    <div class="kpi-grid" style="margin-top:20px">
+      <div class="kpi-card red"><div class="kpi-label">// PENDIENTES</div><div class="kpi-value" id="difkpi-pend">…</div><div class="kpi-sub">sin resolver</div></div>
+      <div class="kpi-card yellow"><div class="kpi-label">// EN REVISIÓN</div><div class="kpi-value" id="difkpi-rev">…</div><div class="kpi-sub">en proceso</div></div>
+      <div class="kpi-card green"><div class="kpi-label">// RESUELTAS</div><div class="kpi-value" id="difkpi-res">…</div><div class="kpi-sub">este mes</div></div>
+      <div class="kpi-card blue"><div class="kpi-label">// REGISTRADAS HOY</div><div class="kpi-value" id="difkpi-hoy">…</div><div class="kpi-sub">nuevas</div></div>
+    </div>
+
+    <div id="difview-pendientes"></div>
+    <div id="difview-todas" style="display:none"></div>
+    <div id="difview-resueltas" style="display:none"></div>
+  `;
+
+  try {
+    DIF_DATA = await sbGet('diferencias_stock', 'order=creado_en.desc&limit=500&select=id,oc_numero,producto_codigo,producto_nombre,tipo,cantidad_pedida,cantidad_encontrada,estado,obs,registrado_por,resuelto_por,creado_en,resuelto_en');
+    renderDIFKpis();
+    renderDIFPendientes();
+  } catch(e) {
+    el.innerHTML += `<div style="color:var(--red);font-family:var(--mono);font-size:12px;margin-top:16px">Error: ${e.message}</div>`;
+  }
+}
+
+function switchDIFTab(tab) {
+  DIF_TAB = tab;
+  ['pendientes','todas','resueltas'].forEach(t => {
+    document.getElementById('diftab-'+t)?.classList.toggle('active', t === tab);
+    const v = document.getElementById('difview-'+t);
+    if (v) v.style.display = t === tab ? 'block' : 'none';
+  });
+  if (tab === 'pendientes') renderDIFPendientes();
+  if (tab === 'todas') renderDIFTodas();
+  if (tab === 'resueltas') renderDIFResueltas();
+}
+
+function renderDIFKpis() {
+  const hoy = HOY();
+  const mesActual = hoy.substring(0,7);
+  const pend = DIF_DATA.filter(d => d.estado === 'PENDIENTE').length;
+  const rev = DIF_DATA.filter(d => d.estado === 'EN_REVISION').length;
+  const res = DIF_DATA.filter(d => d.estado === 'RESUELTA' && d.resuelto_en && d.resuelto_en.substring(0,7) === mesActual).length;
+  const nuevas = DIF_DATA.filter(d => d.creado_en && d.creado_en.substring(0,10) === hoy).length;
+  document.getElementById('difkpi-pend').textContent = pend;
+  document.getElementById('difkpi-rev').textContent = rev;
+  document.getElementById('difkpi-res').textContent = res;
+  document.getElementById('difkpi-hoy').textContent = nuevas;
+  if (pend > 0) document.getElementById('difkpi-pend').style.color = 'var(--red)';
+  if (rev > 0) document.getElementById('difkpi-rev').style.color = 'var(--yellow)';
+}
+
+const DIF_TIPO_TAG = {
+  FALTANTE: '<span class="tag tag-red">Faltante</span>',
+  SOBRANTE: '<span class="tag tag-blue">Sobrante</span>',
+  CODIGO_INCORRECTO: '<span class="tag tag-yellow">Código incorrecto</span>',
+  DIFERENCIA_CANTIDAD: '<span class="tag tag-yellow">Dif. cantidad</span>',
+};
+const DIF_ESTADO_TAG = {
+  PENDIENTE: '<span class="tag tag-red">● Pendiente</span>',
+  EN_REVISION: '<span class="tag tag-yellow">● En revisión</span>',
+  RESUELTA: '<span class="tag tag-green">✓ Resuelta</span>',
+  ANULADA: '<span class="tag" style="background:rgba(100,100,100,0.15);color:#666;border-color:#444">Anulada</span>',
+};
+
+function difRow(d, showActions=true) {
+  const difCant = d.cantidad_pedida && d.cantidad_encontrada !== null
+    ? `<span style="font-family:var(--mono);font-size:11px">Ped: <b>${d.cantidad_pedida}</b> / Enc: <b style="color:${d.cantidad_encontrada < d.cantidad_pedida ? 'var(--red)' : 'var(--green)'}">${d.cantidad_encontrada}</b></span>`
+    : d.cantidad_pedida ? `<span style="font-family:var(--mono);font-size:11px">Pedido: ${d.cantidad_pedida}</span>` : '—';
+
+  const canChangeState = SESSION.rol === 'admin' || SESSION.rol === 'operador';
+  const canResolve = SESSION.rol === 'admin';
+
+  return `<tr>
+    <td style="font-family:var(--mono);font-size:11px;color:var(--accent);font-weight:600">${d.oc_numero || '—'}</td>
+    <td>
+      <div style="font-weight:600;color:var(--text);font-size:13px">${d.producto_nombre || '—'}</div>
+      ${d.producto_codigo ? `<div style="font-family:var(--mono);font-size:10px;color:var(--text3)">${d.producto_codigo}</div>` : ''}
+    </td>
+    <td>${DIF_TIPO_TAG[d.tipo] || d.tipo}</td>
+    <td>${difCant}</td>
+    <td>${DIF_ESTADO_TAG[d.estado] || d.estado}</td>
+    <td style="font-size:11px;color:var(--text3);max-width:160px">${d.obs || '—'}</td>
+    <td style="font-family:var(--mono);font-size:10px;color:var(--text3)">${d.creado_en ? d.creado_en.substring(0,10) : '—'}</td>
+    ${showActions && d.estado !== 'RESUELTA' && d.estado !== 'ANULADA' ? `
+    <td>
+      <div style="display:flex;gap:6px">
+        ${canChangeState && d.estado === 'PENDIENTE' ? `<button class="btn btn-outline btn-sm" onclick="cambiarEstadoDif('${d.id}','EN_REVISION')">En revisión</button>` : ''}
+        ${canResolve && (d.estado === 'PENDIENTE' || d.estado === 'EN_REVISION') ? `<button class="btn btn-success btn-sm" onclick="cambiarEstadoDif('${d.id}','RESUELTA')">✓ Resolver</button>` : ''}
+        ${canChangeState ? `<button class="btn btn-outline btn-sm" style="color:var(--text3)" onclick="cambiarEstadoDif('${d.id}','ANULADA')">Anular</button>` : ''}
+      </div>
+    </td>` : `<td></td>`}
+  </tr>`;
+}
+
+function renderDIFPendientes() {
+  const el = document.getElementById('difview-pendientes');
+  if (!el) return;
+  const items = DIF_DATA.filter(d => d.estado === 'PENDIENTE' || d.estado === 'EN_REVISION');
+
+  if (!items.length) {
+    el.innerHTML = `<div style="text-align:center;padding:56px;color:var(--text3);font-family:var(--mono);font-size:12px">✓ SIN DIFERENCIAS PENDIENTES</div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><div class="panel-title">DIFERENCIAS ACTIVAS (${items.length})</div></div>
+      <table class="data-table">
+        <thead><tr><th>OC / Pedido</th><th>Producto</th><th>Tipo</th><th>Cantidades</th><th>Estado</th><th>Observación</th><th>Fecha</th><th>Acciones</th></tr></thead>
+        <tbody>${items.map(d => difRow(d)).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+function renderDIFTodas() {
+  const el = document.getElementById('difview-todas');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div style="display:flex;gap:10px;margin:12px 0;flex-wrap:wrap">
+      <input type="text" id="dif-f-buscar" oninput="filtrarDIF()" placeholder="Buscar producto, código, OC..." style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;width:260px;">
+      <select id="dif-f-tipo" onchange="filtrarDIF()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="">Todos los tipos</option>
+        <option value="FALTANTE">Faltante</option>
+        <option value="SOBRANTE">Sobrante</option>
+        <option value="CODIGO_INCORRECTO">Código incorrecto</option>
+        <option value="DIFERENCIA_CANTIDAD">Diferencia cantidad</option>
+      </select>
+      <select id="dif-f-estado" onchange="filtrarDIF()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+        <option value="">Todos los estados</option>
+        <option value="PENDIENTE">Pendiente</option>
+        <option value="EN_REVISION">En revisión</option>
+        <option value="RESUELTA">Resuelta</option>
+        <option value="ANULADA">Anulada</option>
+      </select>
+      <input type="date" id="dif-f-desde" onchange="filtrarDIF()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+      <input type="date" id="dif-f-hasta" onchange="filtrarDIF()" style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px 12px;color:var(--text2);font-size:11px;font-family:var(--mono);outline:none;">
+      <button class="btn btn-outline btn-sm" onclick="exportarDIFCSV()">⬇ Exportar</button>
+    </div>
+    <div class="panel">
+      <table class="data-table">
+        <thead><tr><th>OC / Pedido</th><th>Producto</th><th>Tipo</th><th>Cantidades</th><th>Estado</th><th>Observación</th><th>Fecha</th><th>Acciones</th></tr></thead>
+        <tbody id="dif-tbody"></tbody>
+      </table>
+    </div>`;
+  filtrarDIF();
+}
+
+function filtrarDIF() {
+  const buscar = document.getElementById('dif-f-buscar')?.value.toLowerCase() || '';
+  const fTipo = document.getElementById('dif-f-tipo')?.value || '';
+  const fEstado = document.getElementById('dif-f-estado')?.value || '';
+  const fDesde = document.getElementById('dif-f-desde')?.value || '';
+  const fHasta = document.getElementById('dif-f-hasta')?.value || '';
+  const tbody = document.getElementById('dif-tbody');
+  if (!tbody) return;
+
+  const filtered = DIF_DATA.filter(d => {
+    if (buscar && !((d.producto_nombre||'').toLowerCase().includes(buscar) || (d.producto_codigo||'').toLowerCase().includes(buscar) || (d.oc_numero||'').toLowerCase().includes(buscar))) return false;
+    if (fTipo && d.tipo !== fTipo) return false;
+    if (fEstado && d.estado !== fEstado) return false;
+    const fecha = d.creado_en ? d.creado_en.substring(0,10) : '';
+    if (fDesde && fecha < fDesde) return false;
+    if (fHasta && fecha > fHasta) return false;
+    return true;
+  });
+
+  tbody.innerHTML = filtered.length
+    ? filtered.map(d => difRow(d)).join('')
+    : `<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text3);font-family:var(--mono);font-size:11px">Sin registros</td></tr>`;
+}
+
+function renderDIFResueltas() {
+  const el = document.getElementById('difview-resueltas');
+  if (!el) return;
+  const items = DIF_DATA.filter(d => d.estado === 'RESUELTA');
+  el.innerHTML = `
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><div class="panel-title">DIFERENCIAS RESUELTAS (${items.length})</div></div>
+      <table class="data-table">
+        <thead><tr><th>OC / Pedido</th><th>Producto</th><th>Tipo</th><th>Cantidades</th><th>Estado</th><th>Observación</th><th>Registrada</th><th></th></tr></thead>
+        <tbody>${items.length ? items.map(d => difRow(d, false)).join('') : '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text3);font-family:var(--mono);font-size:11px">Sin diferencias resueltas</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
+function exportarDIFCSV() {
+  let csv = 'OC/Pedido,Código,Producto,Tipo,Cant.Pedida,Cant.Encontrada,Estado,Observación,Fecha\n';
+  DIF_DATA.forEach(d => {
+    csv += `"${d.oc_numero||''}","${d.producto_codigo||''}","${d.producto_nombre||''}",${d.tipo},${d.cantidad_pedida||''},${d.cantidad_encontrada||''},${d.estado},"${d.obs||''}",${d.creado_en?d.creado_en.substring(0,10):''}\n`;
+  });
+  const blob = new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'diferencias_'+HOY()+'.csv'; a.click();
+}
+
+async function cambiarEstadoDif(id, nuevoEstado) {
+  const confirmMsg = nuevoEstado === 'RESUELTA' ? '¿Marcar como resuelta? Esto indica que el stock fue ajustado.' : nuevoEstado === 'ANULADA' ? '¿Anular esta diferencia?' : null;
+  if (confirmMsg && !confirm(confirmMsg)) return;
+
+  const payload = { estado: nuevoEstado };
+  if (nuevoEstado === 'RESUELTA') { payload.resuelto_por = SESSION.id; payload.resuelto_en = new Date().toISOString(); }
+
+  try {
+    await sbPatch('diferencias_stock', 'id=eq.'+id, payload);
+    const d = DIF_DATA.find(x => x.id === id);
+    if (d) { d.estado = nuevoEstado; if (nuevoEstado === 'RESUELTA') d.resuelto_en = new Date().toISOString(); }
+    toast(nuevoEstado === 'RESUELTA' ? '✓ Diferencia resuelta' : nuevoEstado === 'EN_REVISION' ? '→ Marcada en revisión' : 'Anulada', 'ok');
+    renderDIFKpis();
+    if (DIF_TAB === 'pendientes') renderDIFPendientes();
+    if (DIF_TAB === 'todas') filtrarDIF();
+    if (DIF_TAB === 'resueltas') renderDIFResueltas();
+  } catch(e) { toast('Error: '+e.message,'error'); }
+}
+
+// ── MODAL NUEVA DIFERENCIA ──
+function abrirModalNuevaDif() {
+  let m = document.getElementById('modal-nueva-dif');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal-nueva-dif';
+    m.className = 'modal-overlay';
+    m.innerHTML = `<div class="modal" style="max-width:520px">
+      <div class="modal-header">
+        <div class="modal-title">+ Registrar Diferencia de Stock</div>
+        <div class="modal-close" onclick="document.getElementById('modal-nueva-dif').classList.remove('open')">✕</div>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Nº OC / Pedido *</label>
+            <input type="text" class="form-input" id="nd-oc" placeholder="Ej: OC-2025-0042">
+          </div>
+          <div class="form-group-inner">
+            <label class="form-label-inner">Tipo de diferencia *</label>
+            <select class="form-select" id="nd-tipo" onchange="toggleCantFields()">
+              <option value="FALTANTE">Faltante</option>
+              <option value="SOBRANTE">Sobrante</option>
+              <option value="CODIGO_INCORRECTO">Código incorrecto</option>
+              <option value="DIFERENCIA_CANTIDAD">Diferencia de cantidad</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Código del producto</label>
+            <input type="text" class="form-input" id="nd-codigo" placeholder="Ej: 7798010123456">
+          </div>
+          <div class="form-group-inner">
+            <label class="form-label-inner">Nombre del producto *</label>
+            <input type="text" class="form-input" id="nd-nombre" placeholder="Nombre o descripción">
+          </div>
+        </div>
+        <div class="form-row" id="nd-cant-row">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Cantidad pedida</label>
+            <input type="number" min="0" class="form-input" id="nd-cant-ped" placeholder="0" style="text-align:center">
+          </div>
+          <div class="form-group-inner">
+            <label class="form-label-inner">Cantidad encontrada</label>
+            <input type="number" min="0" class="form-input" id="nd-cant-enc" placeholder="0" style="text-align:center">
+          </div>
+        </div>
+        <div class="form-row single" style="margin-bottom:0">
+          <div class="form-group-inner">
+            <label class="form-label-inner">Observaciones</label>
+            <textarea class="form-input" id="nd-obs" rows="2" style="resize:vertical" placeholder="Detalle adicional, ubicación, lote, etc."></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="document.getElementById('modal-nueva-dif').classList.remove('open')">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarNuevaDif()">Registrar →</button>
+      </div>
+    </div>`;
+    m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); });
+    document.body.appendChild(m);
+  }
+  ['nd-oc','nd-codigo','nd-nombre','nd-obs'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+  document.getElementById('nd-cant-ped').value = '';
+  document.getElementById('nd-cant-enc').value = '';
+  document.getElementById('nd-tipo').value = 'FALTANTE';
+  toggleCantFields();
+  m.classList.add('open');
+}
+
+function toggleCantFields() {
+  const tipo = document.getElementById('nd-tipo')?.value;
+  const row = document.getElementById('nd-cant-row');
+  if (row) row.style.display = tipo === 'DIFERENCIA_CANTIDAD' ? 'flex' : tipo === 'SOBRANTE' ? 'flex' : 'none';
+}
+
+async function confirmarNuevaDif() {
+  const oc = document.getElementById('nd-oc').value.trim();
+  const tipo = document.getElementById('nd-tipo').value;
+  const codigo = document.getElementById('nd-codigo').value.trim() || null;
+  const nombre = document.getElementById('nd-nombre').value.trim();
+  const cantPed = document.getElementById('nd-cant-ped').value ? parseInt(document.getElementById('nd-cant-ped').value) : null;
+  const cantEnc = document.getElementById('nd-cant-enc').value ? parseInt(document.getElementById('nd-cant-enc').value) : null;
+  const obs = document.getElementById('nd-obs').value.trim() || null;
+
+  if (!oc || !nombre) { toast('⚠ OC/Pedido y nombre del producto son obligatorios', 'warn'); return; }
+
+  try {
+    await sbPost('diferencias_stock', {
+      oc_numero: oc, tipo, producto_codigo: codigo, producto_nombre: nombre,
+      cantidad_pedida: cantPed, cantidad_encontrada: cantEnc,
+      estado: 'PENDIENTE', obs, registrado_por: SESSION.id
+    });
+    await sbPost('auditoria', { usuario_id:SESSION.id, username:SESSION.username, accion:'NUEVA_DIFERENCIA', modulo:'DIFERENCIAS', detalle:{oc, producto:nombre, tipo} });
+
+    document.getElementById('modal-nueva-dif').classList.remove('open');
+    toast('✓ Diferencia registrada', 'ok');
+    DIF_DATA = await sbGet('diferencias_stock', 'order=creado_en.desc&limit=500&select=id,oc_numero,producto_codigo,producto_nombre,tipo,cantidad_pedida,cantidad_encontrada,estado,obs,registrado_por,resuelto_por,creado_en,resuelto_en');
+    renderDIFKpis();
+    if (DIF_TAB === 'pendientes') renderDIFPendientes();
+    if (DIF_TAB === 'todas') filtrarDIF();
+  } catch(e) { toast('Error: '+e.message,'error'); }
+}
 
 window.addEventListener('DOMContentLoaded', () => {
   const s = loadSession();
