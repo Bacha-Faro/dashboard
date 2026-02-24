@@ -576,6 +576,13 @@ body::after {
       <div class="nav-item" onclick="navTo('diferencias',this)">
         <span class="nav-icon">⚠️</span> Diferencias
       </div>
+      <div class="nav-section">// ANALYTICS</div>
+      <div class="nav-item" onclick="navTo('bi_compras',this)">
+        <span class="nav-icon">📊</span> BI Compras
+      </div>
+      <div class="nav-item" onclick="navTo('bi_logistica',this)">
+        <span class="nav-icon">📈</span> BI Logística
+      </div>
       <div id="nav-admin-section" style="display:none">
         <div class="nav-section-label">// ADMINISTRACIÓN</div>
         <div class="nav-item" onclick="navTo('usuarios',this)">
@@ -865,6 +872,8 @@ function navTo(page, el) {
     comisionistas:  () => renderComisionistas(mc),
     proveedores:    () => renderProveedores(mc),
     diferencias:    () => renderDiferencias(mc),
+    bi_compras:     () => renderBICompras(mc),
+    bi_logistica:   () => renderBILogistica(mc),
   };
   if (pages[page]) pages[page]();
   else renderPlaceholder(mc, page);
@@ -4324,6 +4333,50 @@ async function confirmarNuevaDif() {
     if (DIF_TAB === 'pendientes') renderDIFPendientes();
     if (DIF_TAB === 'todas') filtrarDIF();
   } catch(e) { toast('Error: '+e.message,'error'); }
+}
+
+
+// ══════════════════════════════════════════════
+//  MÓDULO BI — POWER BI EMBEBIDO
+// ══════════════════════════════════════════════
+
+function renderBICompras(el) {
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;margin-bottom:2px">BI — Compras</h2>
+        <p style="color:var(--text3);font-family:var(--mono);font-size:11px">// TABLERO DE INDICADORES DE COMPRAS · POWER BI</p>
+      </div>
+      <a href="https://app.powerbi.com/view?embedImagePlaceholder=true&r=eyJrIjoiMzRiNTY2MDMtMGYyNS00ZGU3LWE4NjgtY2ZlMDM3YTY3NmQ0IiwidCI6IjkxZmIyN2ViLTk3MTAtNDFjMS04ZDY0LWRmMmM0OThiMDUwZCIsImMiOjR9" target="_blank" class="btn btn-outline btn-sm">↗ Abrir en Power BI</a>
+    </div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;overflow:hidden;width:100%;position:relative;">
+      <iframe
+        title="Tablero de Compras"
+        src="https://app.powerbi.com/view?embedImagePlaceholder=true&r=eyJrIjoiMzRiNTY2MDMtMGYyNS00ZGU3LWE4NjgtY2ZlMDM3YTY3NmQ0IiwidCI6IjkxZmIyN2ViLTk3MTAtNDFjMS04ZDY0LWRmMmM0OThiMDUwZCIsImMiOjR9"
+        style="width:100%;height:calc(100vh - 160px);min-height:600px;border:none;display:block;"
+        allowFullScreen="true">
+      </iframe>
+    </div>
+  `;
+}
+
+function renderBILogistica(el) {
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;margin-bottom:2px">BI — Logística</h2>
+        <p style="color:var(--text3);font-family:var(--mono);font-size:11px">// TABLERO DE INDICADORES LOGÍSTICOS · POWER BI</p>
+      </div>
+    </div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:60px 40px;text-align:center;">
+      <div style="font-size:48px;margin-bottom:20px">📈</div>
+      <div style="font-family:var(--mono);font-size:12px;letter-spacing:2px;color:var(--violet);margin-bottom:12px">EN DESARROLLO</div>
+      <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:8px">Tablero de Logística</div>
+      <div style="color:var(--text2);font-size:13px;max-width:400px;margin:0 auto">
+        El tablero de indicadores logísticos está en desarrollo. Una vez publicado en Power BI, se integrará automáticamente aquí.
+      </div>
+    </div>
+  `;
 }
 
 window.addEventListener('DOMContentLoaded', () => {
