@@ -531,12 +531,13 @@ body::after {
   <div class="app-topbar">
     <div class="app-brand">
       <div class="app-brand-tag">// SYS.CTRL</div>
-      <div class="app-brand-name">Panel de Control — Droguería RC</div>
+      <div class="app-brand-name">PANEL DE CONTROL</div>
+      <img src="https://bacha-faro.github.io/dashboard/logo_grassi.png" alt="Droguería Grassi" style="height:34px;object-fit:contain;filter:drop-shadow(0 0 6px rgba(79,127,255,0.4));margin-left:8px;">
     </div>
     <div class="app-user">
       <div class="user-info">
-        <div class="user-name-top" id="top-username">—</div>
-        <div class="user-role-top" id="top-role">—</div>
+        <div class="user-name-top">ADMINISTRADOR AGUSTÍN FARÓ</div>
+        <div class="user-role-top role-admin" id="top-role">ADMIN</div>
       </div>
       <button class="btn-logout" onclick="logout()">SALIR →</button>
     </div>
@@ -576,7 +577,7 @@ body::after {
       <div class="nav-item" onclick="navTo('diferencias',this)">
         <span class="nav-icon">⚠️</span> Diferencias
       </div>
-      <div class="nav-section">// ANALYTICS</div>
+      <div class="nav-section-label">// ANALYTICS</div>
       <div class="nav-item" onclick="navTo('bi_compras',this)">
         <span class="nav-icon">📊</span> BI Compras
       </div>
@@ -883,88 +884,437 @@ function navTo(page, el) {
 //  DASHBOARD
 // ══════════════════════════════════════════════
 async function renderDashboard(el) {
-  const hoy = new Date().toLocaleDateString('es-AR', {
-    weekday:'long', year:'numeric', month:'long', day:'numeric'
-  }).toUpperCase();
 
   el.innerHTML = `
-    <div style="margin-bottom:28px">
-      <h1 style="font-size:22px;font-weight:700;margin-bottom:4px">Bienvenido, ${SESSION.nombre} 👋</h1>
-      <p style="color:var(--text3);font-family:var(--mono);font-size:11px">// ${hoy}</p>
-    </div>
-    <div class="kpi-grid">
-      <div class="kpi-card blue">
-        <div class="kpi-label">// BACHAS EN CALLE</div>
-        <div class="kpi-value" id="kpi-bachas">…</div>
-        <div class="kpi-sub">en circulación</div>
-      </div>
-      <div class="kpi-card red">
-        <div class="kpi-label">// BACHAS VENCIDAS</div>
-        <div class="kpi-value" id="kpi-venc">…</div>
-        <div class="kpi-sub">retorno atrasado</div>
-      </div>
-      <div class="kpi-card green">
-        <div class="kpi-label">// USUARIOS ACTIVOS</div>
-        <div class="kpi-value" id="kpi-users">…</div>
-        <div class="kpi-sub">en el sistema</div>
-      </div>
-      <div class="kpi-card yellow">
-        <div class="kpi-label">// DIFERENCIAS</div>
-        <div class="kpi-value" id="kpi-dif">…</div>
-        <div class="kpi-sub">sin resolver</div>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="panel-header"><div class="panel-title">ACTIVIDAD RECIENTE</div></div>
-      <div class="panel-body" id="panel-actividad">
-        <p style="color:var(--text3);font-family:var(--mono);font-size:11px">Cargando...</p>
-      </div>
-    </div>
-  `;
+  <style>
+    /* ── DASHBOARD V2 ── */
+    .db-wrapper { display:flex; flex-direction:column; gap:20px; padding-bottom:40px; }
 
+    /* HEADER */
+    .db-header {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:22px 28px 18px;
+      background:linear-gradient(120deg,rgba(79,127,255,.08) 0%,rgba(139,92,246,.06) 100%);
+      border:1px solid rgba(79,127,255,.15); border-radius:12px;
+      position:relative; overflow:hidden;
+    }
+    .db-header::before {
+      content:''; position:absolute; inset:0;
+      background:radial-gradient(ellipse 60% 80% at 0% 50%, rgba(79,127,255,.07), transparent);
+      pointer-events:none;
+    }
+    .db-greeting { font-size:24px; font-weight:800; letter-spacing:-.5px; }
+    .db-greeting span { color:var(--accent); }
+    .db-date-line { font-family:var(--mono); font-size:11px; color:var(--text3); margin-top:4px; letter-spacing:1px; }
+
+    /* WIDGETS FILA DERECHA */
+    .db-widgets { display:flex; gap:12px; align-items:stretch; }
+    .db-widget {
+      background:rgba(13,18,37,.7); border:1px solid rgba(79,127,255,.15);
+      border-radius:10px; padding:12px 18px; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; min-width:90px; gap:4px;
+    }
+    .db-widget-icon { font-size:22px; line-height:1; }
+    .db-widget-val { font-size:17px; font-weight:800; font-family:var(--mono); color:var(--text); }
+    .db-widget-label { font-size:9px; font-family:var(--mono); color:var(--text3); letter-spacing:1px; }
+
+    /* RELOJ */
+    #db-clock { font-size:28px; font-weight:900; font-family:var(--mono); color:var(--accent);
+      letter-spacing:2px; line-height:1; }
+    #db-clock-date { font-size:9px; font-family:var(--mono); color:var(--text3); letter-spacing:1.5px; margin-top:4px; text-align:center; }
+
+    /* GRID PRINCIPAL */
+    .db-main-grid {
+      display:grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      grid-template-rows: auto auto;
+      gap:16px;
+    }
+
+    /* CARDS */
+    .db-card {
+      background:rgba(13,18,37,.8); border:1px solid rgba(79,127,255,.12);
+      border-radius:12px; padding:20px 22px; position:relative; overflow:hidden;
+      transition:transform .2s, border-color .2s;
+    }
+    .db-card:hover { transform:translateY(-2px); border-color:rgba(79,127,255,.3); }
+    .db-card::after {
+      content:''; position:absolute; top:0; left:0; right:0; height:2px;
+      border-radius:12px 12px 0 0;
+    }
+    .db-card.blue::after  { background:linear-gradient(90deg,var(--accent),transparent); }
+    .db-card.violet::after { background:linear-gradient(90deg,var(--violet),transparent); }
+    .db-card.green::after  { background:linear-gradient(90deg,var(--green),transparent); }
+    .db-card.red::after    { background:linear-gradient(90deg,var(--red),transparent); }
+    .db-card.orange::after { background:linear-gradient(90deg,#f97316,transparent); }
+    .db-card.yellow::after { background:linear-gradient(90deg,var(--yellow),transparent); }
+
+    .db-card-icon {
+      font-size:36px; margin-bottom:10px; display:block;
+      filter:drop-shadow(0 0 8px rgba(79,127,255,.3));
+    }
+    .db-card-label {
+      font-family:var(--mono); font-size:9px; letter-spacing:2px;
+      color:var(--text3); margin-bottom:6px; text-transform:uppercase;
+    }
+    .db-card-value {
+      font-size:48px; font-weight:900; line-height:1;
+      font-family:var(--mono); letter-spacing:-2px;
+      background:linear-gradient(135deg,var(--text) 60%,var(--text3));
+      -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+      background-clip:text;
+    }
+    .db-card.blue .db-card-value    { background:linear-gradient(135deg,#60a5fa,var(--accent)); -webkit-background-clip:text; background-clip:text; }
+    .db-card.violet .db-card-value  { background:linear-gradient(135deg,#c084fc,var(--violet)); -webkit-background-clip:text; background-clip:text; }
+    .db-card.green .db-card-value   { background:linear-gradient(135deg,#4ade80,var(--green)); -webkit-background-clip:text; background-clip:text; }
+    .db-card.red .db-card-value     { background:linear-gradient(135deg,#f87171,var(--red)); -webkit-background-clip:text; background-clip:text; }
+    .db-card.yellow .db-card-value  { background:linear-gradient(135deg,#fde68a,var(--yellow)); -webkit-background-clip:text; background-clip:text; }
+    .db-card.orange .db-card-value  { background:linear-gradient(135deg,#fb923c,#f97316); -webkit-background-clip:text; background-clip:text; }
+
+    .db-card-sub { font-size:11px; color:var(--text3); margin-top:6px; font-family:var(--mono); }
+    .db-card-glow {
+      position:absolute; width:120px; height:120px; border-radius:50%;
+      bottom:-40px; right:-20px; opacity:.06; filter:blur(30px);
+    }
+    .db-card.blue .db-card-glow    { background:var(--accent); }
+    .db-card.violet .db-card-glow  { background:var(--violet); }
+    .db-card.green .db-card-glow   { background:var(--green); }
+    .db-card.red .db-card-glow     { background:var(--red); }
+    .db-card.yellow .db-card-glow  { background:var(--yellow); }
+    .db-card.orange .db-card-glow  { background:#f97316; }
+
+    /* BADGE ALERTA */
+    .db-alert-badge {
+      display:inline-flex; align-items:center; gap:5px;
+      padding:3px 10px; border-radius:20px; font-size:10px; font-family:var(--mono);
+      margin-top:8px; letter-spacing:.5px;
+    }
+    .db-alert-badge.danger { background:rgba(239,68,68,.15); color:var(--red); border:1px solid rgba(239,68,68,.2); }
+    .db-alert-badge.ok    { background:rgba(0,217,126,.1); color:var(--green); border:1px solid rgba(0,217,126,.2); }
+    .db-alert-badge.warn  { background:rgba(251,191,36,.1); color:var(--yellow); border:1px solid rgba(251,191,36,.2); }
+
+    /* CARD TEMPERATURA (span completo) */
+    .db-card.span2 { grid-column: span 2; }
+    .db-temp-row { display:flex; gap:16px; margin-top:12px; }
+    .db-temp-sensor {
+      flex:1; background:rgba(0,0,0,.2); border-radius:8px; padding:12px 14px;
+      border:1px solid rgba(79,127,255,.1);
+    }
+    .db-temp-sensor-name { font-family:var(--mono); font-size:9px; color:var(--text3); letter-spacing:1.5px; margin-bottom:6px; }
+    .db-temp-val { font-size:28px; font-weight:800; font-family:var(--mono); }
+    .db-temp-val.cold  { color:#60a5fa; }
+    .db-temp-val.ok    { color:var(--green); }
+    .db-temp-val.warm  { color:var(--yellow); }
+    .db-temp-val.hot   { color:var(--red); }
+    .db-hum-val { font-size:13px; color:var(--text3); font-family:var(--mono); margin-top:2px; }
+
+    /* MINI BAR CHART */
+    .db-mini-bars { display:flex; align-items:flex-end; gap:3px; height:40px; margin-top:10px; }
+    .db-mini-bar {
+      flex:1; border-radius:3px 3px 0 0;
+      background:linear-gradient(180deg,rgba(79,127,255,.6),rgba(79,127,255,.2));
+      transition:height .3s ease; min-height:3px;
+      animation: barRise .6s ease forwards;
+    }
+    @keyframes barRise { from { transform:scaleY(0); transform-origin:bottom; } to { transform:scaleY(1); } }
+
+    /* CARD PROVEEDORES */
+    .db-prov-list { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
+    .db-prov-row {
+      display:flex; align-items:center; gap:10px;
+      padding:8px 10px; background:rgba(0,0,0,.2); border-radius:8px;
+      border:1px solid rgba(79,127,255,.07); font-size:12px;
+    }
+    .db-prov-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+    .db-prov-name { flex:1; font-weight:600; color:var(--text); }
+    .db-prov-tag { font-family:var(--mono); font-size:9px; padding:2px 8px; border-radius:10px; }
+
+    /* CARD DIFERENCIAS */
+    .db-dif-list { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
+    .db-dif-row {
+      display:flex; align-items:center; gap:10px; padding:8px 10px;
+      background:rgba(0,0,0,.2); border-radius:8px; border:1px solid rgba(79,127,255,.07);
+    }
+    .db-dif-tipo { font-family:var(--mono); font-size:9px; padding:2px 8px; border-radius:10px; flex-shrink:0; }
+    .db-dif-prod { flex:1; font-size:11px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .db-dif-oc { font-family:var(--mono); font-size:9px; color:var(--text3); }
+
+    /* ANIMACIONES ENTRADA */
+    @keyframes fadeUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
+    .db-card { animation: fadeUp .4s ease both; }
+    .db-card:nth-child(1) { animation-delay:.05s; }
+    .db-card:nth-child(2) { animation-delay:.1s; }
+    .db-card:nth-child(3) { animation-delay:.15s; }
+    .db-card:nth-child(4) { animation-delay:.2s; }
+    .db-card:nth-child(5) { animation-delay:.25s; }
+    .db-card:nth-child(6) { animation-delay:.3s; }
+
+    /* PULSE en alerta */
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .db-pulse { animation: pulse 2s infinite; }
+
+    /* CONTADOR ANIMADO */
+    .count-up { display:inline-block; }
+  </style>
+
+  <div class="db-wrapper">
+
+    <!-- HEADER -->
+    <div class="db-header">
+      <div>
+        <div class="db-greeting">Bienvenido, <span id="db-nombre">—</span> 👋</div>
+        <div class="db-date-line" id="db-fecha">—</div>
+      </div>
+      <div class="db-widgets">
+        <!-- RELOJ -->
+        <div class="db-widget" style="min-width:110px;">
+          <div id="db-clock">--:--:--</div>
+          <div id="db-clock-date">—</div>
+        </div>
+        <!-- CLIMA -->
+        <div class="db-widget" id="db-clima-widget">
+          <div class="db-widget-icon">🌤️</div>
+          <div class="db-widget-val" id="db-clima-temp">—°</div>
+          <div class="db-widget-label">RÍO CUARTO</div>
+        </div>
+        <!-- EVENTOS -->
+        <div class="db-widget" style="min-width:120px;" id="db-eventos-widget">
+          <div class="db-widget-icon">📅</div>
+          <div class="db-widget-val" id="db-eventos-count">—</div>
+          <div class="db-widget-label">EVENTOS HOY</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GRID PRINCIPAL -->
+    <div class="db-main-grid">
+
+      <!-- CARD 1: TEMPERATURA -->
+      <div class="db-card blue span2">
+        <div class="db-card-glow"></div>
+        <div class="db-card-label">🌡️ &nbsp;// TEMPERATURA & HUMEDAD — DEPÓSITO</div>
+        <div class="db-temp-row" id="db-temp-row">
+          <div class="db-temp-sensor">
+            <div class="db-temp-sensor-name">CARGANDO...</div>
+            <div class="db-temp-val ok">—°C</div>
+            <div class="db-hum-val">💧 —%</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CARD 2: DIFERENCIAS -->
+      <div class="db-card yellow">
+        <div class="db-card-glow"></div>
+        <div class="db-card-label">⚠️ &nbsp;// DIFERENCIAS PENDIENTES</div>
+        <div class="db-card-value" id="db-dif-count">—</div>
+        <div class="db-card-sub">sin resolver</div>
+        <div id="db-dif-badge"></div>
+        <div class="db-dif-list" id="db-dif-list">
+          <div style="font-family:var(--mono);font-size:10px;color:var(--text3)">Cargando...</div>
+        </div>
+      </div>
+
+      <!-- CARD 3: PROVEEDORES -->
+      <div class="db-card violet">
+        <div class="db-card-glow"></div>
+        <div class="db-card-label">📦 &nbsp;// ÚLTIMOS INGRESOS</div>
+        <div class="db-card-value" id="db-prov-count">—</div>
+        <div class="db-card-sub">ingresos recientes</div>
+        <div class="db-prov-list" id="db-prov-list">
+          <div style="font-family:var(--mono);font-size:10px;color:var(--text3)">Cargando...</div>
+        </div>
+      </div>
+
+      <!-- CARD 4: BACHAS -->
+      <div class="db-card blue">
+        <div class="db-card-glow"></div>
+        <span class="db-card-icon">🧺</span>
+        <div class="db-card-label">// BACHAS EN CALLE</div>
+        <div class="db-card-value" id="db-bachas-val">—</div>
+        <div class="db-card-sub">en circulación</div>
+        <div id="db-bachas-badge"></div>
+      </div>
+
+      <!-- CARD 5: CADETES -->
+      <div class="db-card green">
+        <div class="db-card-glow"></div>
+        <span class="db-card-icon">🛵</span>
+        <div class="db-card-label">// ENTREGAS HOY</div>
+        <div class="db-card-value" id="db-cadetes-val">—</div>
+        <div class="db-card-sub">registradas hoy</div>
+        <div class="db-mini-bars" id="db-cadetes-bars"></div>
+      </div>
+
+      <!-- CARD 6: SISTEMA -->
+      <div class="db-card violet">
+        <div class="db-card-glow"></div>
+        <span class="db-card-icon">👥</span>
+        <div class="db-card-label">// USUARIOS ACTIVOS</div>
+        <div class="db-card-value" id="db-users-val">—</div>
+        <div class="db-card-sub">en el sistema</div>
+        <div id="db-users-badge"></div>
+      </div>
+
+    </div>
+  </div>`;
+
+  /* ── RELOJ ── */
+  function tickClock() {
+    const now = new Date();
+    const h = String(now.getHours()).padStart(2,'0');
+    const m = String(now.getMinutes()).padStart(2,'0');
+    const s = String(now.getSeconds()).padStart(2,'0');
+    const el = document.getElementById('db-clock');
+    if (el) el.textContent = `${h}:${m}:${s}`;
+  }
+  tickClock();
+  const clockInterval = setInterval(tickClock, 1000);
+
+  /* ── FECHA ── */
+  const now = new Date();
+  const hoy = now.toLocaleDateString('es-AR',{weekday:'long',year:'numeric',month:'long',day:'numeric'}).toUpperCase();
+  const dEl = document.getElementById('db-fecha');
+  if (dEl) dEl.textContent = '// ' + hoy;
+  const clockDateEl = document.getElementById('db-clock-date');
+  if (clockDateEl) clockDateEl.textContent = now.toLocaleDateString('es-AR',{day:'2-digit',month:'short'}).toUpperCase();
+
+  /* ── NOMBRE ── */
+  const nEl = document.getElementById('db-nombre');
+  if (nEl) nEl.textContent = SESSION.nombre || 'Usuario';
+
+  /* ── CLIMA (Open-Meteo, sin key) ── */
+  (async () => {
+    try {
+      const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=-33.13&longitude=-64.35&current_weather=true');
+      const d = await r.json();
+      const t = d.current_weather?.temperature;
+      const wcode = d.current_weather?.weathercode;
+      const icons = {0:'☀️',1:'🌤️',2:'⛅',3:'☁️',45:'🌫️',48:'🌫️',51:'🌦️',61:'🌧️',71:'❄️',80:'🌧️',95:'⛈️'};
+      const icon = icons[wcode] || '🌡️';
+      const tEl = document.getElementById('db-clima-temp');
+      const wEl = document.querySelector('#db-clima-widget .db-widget-icon');
+      if (tEl) tEl.textContent = `${Math.round(t)}°`;
+      if (wEl) wEl.textContent = icon;
+    } catch(e) {}
+  })();
+
+  /* ── CONTADOR ANIMADO ── */
+  function animateCount(el, target, duration=800) {
+    if (!el) return;
+    const start = performance.now();
+    const from = 0;
+    function step(ts) {
+      const p = Math.min((ts - start) / duration, 1);
+      const ease = 1 - Math.pow(1 - p, 3);
+      el.textContent = Math.round(from + (target - from) * ease);
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  /* ── DATOS ── */
   try {
-    const [movs, users, difs, logs] = await Promise.all([
+    const [movs, difs, users, provs, cadetes, temps] = await Promise.all([
       sbGet('bachas_movimientos', 'fecha_retorno=is.null&tipo=eq.SALIDA&select=id,retorno_esperado'),
+      sbGet('diferencias_stock', 'estado=eq.PENDIENTE&select=id,tipo,producto_nombre,oc_numero&order=creado_en.desc&limit=3'),
       sbGet('usuarios', 'activo=eq.true&select=id'),
-      sbGet('pedidos_diferencias', 'estado=eq.SIN_RESOLVER&select=id'),
-      sbGet('auditoria', 'order=creado_en.desc&limit=10&select=accion,modulo,username,creado_en'),
+      sbGet('proveedores_ingresos', 'select=id,proveedor_nombre,tipo,creado_en&order=creado_en.desc&limit=4').catch(()=>[]),
+      sbGet('cadetes_entregas', 'select=id,creado_en&order=creado_en.desc&limit=7').catch(()=>[]),
+      sbGet('temperatura_registros', 'select=sensor_nombre,temperatura,humedad&order=creado_en.desc&limit=9').catch(()=>[]),
     ]);
 
     const hoyStr = new Date().toISOString().split('T')[0];
     const venc = movs.filter(m => m.retorno_esperado < hoyStr).length;
 
-    document.getElementById('kpi-bachas').textContent = movs.length;
-    document.getElementById('kpi-venc').textContent = venc;
-    if (venc > 0) document.getElementById('kpi-venc').style.color = 'var(--red)';
-    document.getElementById('kpi-users').textContent = users.length;
-    document.getElementById('kpi-dif').textContent = difs.length;
+    // BACHAS
+    const bEl = document.getElementById('db-bachas-val');
+    animateCount(bEl, movs.length);
+    const bBadge = document.getElementById('db-bachas-badge');
+    if (bBadge) bBadge.innerHTML = venc > 0
+      ? `<span class="db-alert-badge danger db-pulse">⚠ ${venc} VENCIDAS</span>`
+      : `<span class="db-alert-badge ok">✓ Sin atrasos</span>`;
 
-    const accionLabel = {
-      LOGIN: '🔓 Ingresó al sistema',
-      LOGOUT: '🔒 Cerró sesión',
-      CREAR_USUARIO: '👤 Creó usuario',
-      DESACTIVAR_USUARIO: '🚫 Desactivó usuario',
-      ACTIVAR_USUARIO: '✅ Activó usuario',
-    };
+    // DIFERENCIAS
+    const dEl2 = document.getElementById('db-dif-count');
+    animateCount(dEl2, difs.length);
+    const difBadge = document.getElementById('db-dif-badge');
+    if (difBadge) difBadge.innerHTML = difs.length > 0
+      ? `<span class="db-alert-badge warn">⚠ Requieren atención</span>`
+      : `<span class="db-alert-badge ok">✓ Sin pendientes</span>`;
+    const difList = document.getElementById('db-dif-list');
+    if (difList) {
+      const tipoColors = {FALTANTE:'rgba(239,68,68,.15);color:var(--red)',SOBRANTE:'rgba(0,217,126,.1);color:var(--green)',CODIGO_INCORRECTO:'rgba(251,191,36,.1);color:var(--yellow)',DIFERENCIA_CANTIDAD:'rgba(79,127,255,.15);color:var(--accent)'};
+      difList.innerHTML = difs.length ? difs.map(d => `
+        <div class="db-dif-row">
+          <span class="db-dif-tipo" style="background:${(tipoColors[d.tipo]||'rgba(79,127,255,.1);color:var(--accent)').split(';')[0]};${(tipoColors[d.tipo]||'').split(';')[1]}">${d.tipo}</span>
+          <span class="db-dif-prod">${d.producto_nombre}</span>
+          <span class="db-dif-oc">OC ${d.oc_numero}</span>
+        </div>`).join('') : `<div style="font-family:var(--mono);font-size:10px;color:var(--green)">✓ Sin diferencias pendientes</div>`;
+    }
 
-    document.getElementById('panel-actividad').innerHTML = logs.length ? `
-      <table class="data-table">
-        <thead><tr><th>Fecha / Hora</th><th>Usuario</th><th>Acción</th><th>Módulo</th></tr></thead>
-        <tbody>
-          ${logs.map(l => `
-            <tr>
-              <td style="font-family:var(--mono);font-size:11px">${fmtDT(l.creado_en)}</td>
-              <td style="font-weight:600;color:var(--text)">${l.username}</td>
-              <td>${accionLabel[l.accion] || l.accion}</td>
-              <td><span class="tag tag-blue">${l.modulo}</span></td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    ` : `<p style="color:var(--text3);font-family:var(--mono);font-size:11px">Sin actividad aún.</p>`;
+    // USUARIOS
+    const uEl = document.getElementById('db-users-val');
+    animateCount(uEl, users.length);
+
+    // PROVEEDORES
+    const pEl = document.getElementById('db-prov-count');
+    animateCount(pEl, provs.length);
+    const pList = document.getElementById('db-prov-list');
+    if (pList) {
+      pList.innerHTML = provs.length ? provs.map((p,i) => {
+        const colors = ['#4f7fff','#8b5cf6','#00d97e','#f59e0b'];
+        const tipos = {INGRESO:'INGRESO',DEVOLUCION:'DEV.',OTRO:'OTRO'};
+        return `<div class="db-prov-row">
+          <div class="db-prov-dot" style="background:${colors[i%4]}"></div>
+          <span class="db-prov-name">${p.proveedor_nombre||'—'}</span>
+          <span class="db-prov-tag" style="background:rgba(79,127,255,.1);color:var(--accent)">${tipos[p.tipo]||p.tipo||'—'}</span>
+        </div>`;
+      }).join('') : `<div style="font-family:var(--mono);font-size:10px;color:var(--text3)">Sin ingresos recientes</div>`;
+    }
+
+    // CADETES (mini bars)
+    const cEl = document.getElementById('db-cadetes-val');
+    const hoyEntregas = cadetes.filter(c => c.creado_en?.startsWith(hoyStr)).length;
+    animateCount(cEl, hoyEntregas);
+    const barsEl = document.getElementById('db-cadetes-bars');
+    if (barsEl && cadetes.length) {
+      // Últimos 7 días
+      const byDay = {};
+      cadetes.forEach(c => {
+        const d = c.creado_en?.split('T')[0];
+        if (d) byDay[d] = (byDay[d]||0) + 1;
+      });
+      const vals = Object.values(byDay).slice(-7);
+      const max = Math.max(...vals, 1);
+      barsEl.innerHTML = vals.map(v => `<div class="db-mini-bar" style="height:${Math.round((v/max)*100)}%"></div>`).join('');
+    }
+
+    // TEMPERATURA — agrupar por sensor
+    const tempRow = document.getElementById('db-temp-row');
+    if (tempRow && temps.length) {
+      const sensors = {};
+      temps.forEach(t => { if (!sensors[t.sensor_nombre]) sensors[t.sensor_nombre] = t; });
+      const sensorList = Object.values(sensors);
+      tempRow.innerHTML = sensorList.map(s => {
+        const tmp = parseFloat(s.temperatura);
+        const cls = tmp < 5 ? 'cold' : tmp < 20 ? 'ok' : tmp < 28 ? 'warm' : 'hot';
+        return `<div class="db-temp-sensor">
+          <div class="db-temp-sensor-name">${s.sensor_nombre}</div>
+          <div class="db-temp-val ${cls}">${tmp.toFixed(1)}°C</div>
+          <div class="db-hum-val">💧 ${s.humedad}%</div>
+        </div>`;
+      }).join('');
+    } else if (tempRow) {
+      tempRow.innerHTML = `<div style="font-family:var(--mono);font-size:10px;color:var(--text3);padding:8px">Sin registros de temperatura</div>`;
+    }
+
+    // EVENTOS: contar diferencias + vencidas como "eventos del día"
+    const eventosHoy = (venc > 0 ? 1 : 0) + (difs.length > 0 ? 1 : 0);
+    const evEl = document.getElementById('db-eventos-count');
+    if (evEl) evEl.textContent = eventosHoy || '0';
 
   } catch(e) {
-    console.error(e);
+    console.error('Dashboard error:', e);
   }
 }
 
