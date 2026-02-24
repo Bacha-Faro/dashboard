@@ -4805,16 +4805,18 @@ function mostrarSplash(callback) {
   `;
   document.body.appendChild(splash);
 
-  // Tomar el src del logo que ya está en el DOM (base64)
-  const logoSrc = document.querySelector('.login-logo img')?.src || document.getElementById('app-topbar-logo')?.src || '';
+  // Tomar el src del logo (base64 embebido en el topbar)
+  const logoSrc = document.getElementById('app-topbar-logo')?.src || '';
   const splashImg = document.getElementById('splash-img');
   if (splashImg && logoSrc) splashImg.src = logoSrc;
 
-  setTimeout(() => {
-    callback();
+  // Siempre termina a los 1.6s pase lo que pase
+  const finish = () => {
+    try { callback(); } catch(e) { console.warn('splash callback error', e); }
     splash.style.opacity = '0';
-    setTimeout(() => splash.remove(), 500);
-  }, 1400);
+    setTimeout(() => { try { splash.remove(); } catch(e){} }, 500);
+  };
+  setTimeout(finish, 1600);
 }
 </script>
 </body>
