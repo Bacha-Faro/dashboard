@@ -873,6 +873,7 @@ function navTo(page, el) {
     comisionistas:  () => renderComisionistas(mc),
     proveedores:    () => renderProveedores(mc),
     diferencias:    () => renderDiferencias(mc),
+    egresos:        () => renderEgresos(mc),
     bi_compras:     () => renderBICompras(mc),
     bi_logistica:   () => renderBILogistica(mc),
   };
@@ -1494,6 +1495,456 @@ async function renderAuditoria(el) {
 // ══════════════════════════════════════════════
 //  PLACEHOLDER
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+//  DEVOLUCIONES A PROVEEDORES
+// ══════════════════════════════════════════════
+let DEV_DATA = [];
+let DEV_TAB = 'pendientes';
+
+async function renderEgresos(el) {
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;margin-bottom:2px">Devoluciones a Proveedores</h2>
+        <p style="color:var(--text3);font-family:var(--mono);font-size:11px">// REGISTRO Y SEGUIMIENTO DE DEVOLUCIONES</p>
+      </div>
+      <div style="display:flex;gap:10px">
+        ${SESSION.rol !== 'solo_lectura' ? `<button class="btn btn-primary" onclick="abrirModalNuevaDev()">+ Nueva Devolución</button>` : ''}
+        <button class="btn btn-outline btn-sm" onclick="exportarDevCSV()">↓ CSV</button>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin:16px -28px 0;padding:0 28px;">
+      <div class="b-tab active" id="devtab-pendientes" onclick="switchDEVTab('pendientes')">PENDIENTES</div>
+      <div class="b-tab" id="devtab-todas"      onclick="switchDEVTab('todas')">TODAS</div>
+      <div class="b-tab" id="devtab-confirmadas" onclick="switchDEVTab('confirmadas')">CONFIRMADAS</div>
+    </div>
+
+    <div class="kpi-grid" style="margin-top:20px">
+      <div class="kpi-card red">   <div class="kpi-label">// PENDIENTES</div><div class="kpi-value" id="devkpi-pend">…</div><div class="kpi-sub">sin nota de crédito</div></div>
+      <div class="kpi-card yellow"><div class="kpi-label">// EN GESTIÓN</div><div class="kpi-value" id="devkpi-gest">…</div><div class="kpi-sub">en proceso</div></div>
+      <div class="kpi-card green"> <div class="kpi-label">// CONFIRMADAS</div><div class="kpi-value" id="devkpi-conf">…</div><div class="kpi-sub">nota de crédito recibida</div></div>
+      <div class="kpi-card blue">  <div class="kpi-label">// REGISTRADAS HOY</div><div class="kpi-value" id="devkpi-hoy">…</div><div class="kpi-sub">nuevas</div></div>
+    </div>
+
+    <div id="devview-pendientes"></div>
+    <div id="devview-todas"       style="display:none"></div>
+    <div id="devview-confirmadas" style="display:none"></div>
+
+    <!-- MODAL NUEVA DEVOLUCIÓN -->
+    <div id="modal-nueva-dev" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:28px;width:560px;max-width:95vw;max-height:90vh;overflow-y:auto;position:relative">
+        <button onclick="cerrarModalDev()" style="position:absolute;top:12px;right:16px;background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer">✕</button>
+        <h3 style="font-size:16px;font-weight:700;margin-bottom:20px">↩ Nueva Devolución</h3>
+
+        <div class="form-group">
+          <label class="form-label">Proveedor *</label>
+          <input type="text" class="form-input" id="dev-proveedor" placeholder="Nombre del proveedor">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label class="form-label">N° Remito / Factura</label>
+            <input type="text" class="form-input" id="dev-remito" placeholder="0001-00012345">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Fecha devolución *</label>
+            <input type="date" class="form-input" id="dev-fecha">
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-top:4px">
+          <label class="form-label">Motivo *</label>
+          <select class="form-input" id="dev-motivo">
+            <option value="">— Seleccionar —</option>
+            <option value="VENCIDO">Producto vencido</option>
+            <option value="DEFECTUOSO">Producto defectuoso / roto</option>
+            <option value="ERROR_PEDIDO">Error en pedido</option>
+            <option value="EXCESO_STOCK">Exceso de stock</option>
+            <option value="PRECIO">Diferencia de precio</option>
+            <option value="OTRO">Otro</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Productos devueltos *</label>
+          <div id="dev-items-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px"></div>
+          <button class="btn btn-outline btn-sm" onclick="agregarItemDev()">+ Agregar producto</button>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Observaciones</label>
+          <textarea class="form-input" id="dev-obs" rows="2" placeholder="Detalles adicionales..." style="resize:vertical"></textarea>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:4px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text2)">
+            <input type="checkbox" id="dev-notif-wa" style="accent-color:var(--green)">
+            <span>📱 Notificar por WhatsApp</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text2)">
+            <input type="checkbox" id="dev-notif-mail" style="accent-color:var(--accent)">
+            <span>✉️ Notificar por Email</span>
+          </label>
+        </div>
+
+        <div id="dev-notif-wa-wrap" style="display:none;margin-top:10px">
+          <input type="text" class="form-input" id="dev-wa-num" placeholder="Número WhatsApp (ej: 5493584123456)" style="font-size:12px">
+          <p style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-top:4px">// Código de país + número sin espacios ni +</p>
+        </div>
+        <div id="dev-notif-mail-wrap" style="display:none;margin-top:10px">
+          <input type="email" class="form-input" id="dev-mail-addr" placeholder="compras@drogueria.com" style="font-size:12px">
+        </div>
+
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+          <button class="btn btn-outline" onclick="cerrarModalDev()">Cancelar</button>
+          <button class="btn btn-primary" onclick="guardarDevolucion()">Registrar Devolución</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL NOTA DE CRÉDITO -->
+    <div id="modal-nc-dev" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:28px;width:400px;max-width:95vw;position:relative">
+        <button onclick="cerrarModalNC()" style="position:absolute;top:12px;right:16px;background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer">✕</button>
+        <h3 style="font-size:16px;font-weight:700;margin-bottom:20px">📄 Adjuntar Nota de Crédito</h3>
+        <input type="hidden" id="nc-dev-id">
+        <div class="form-group">
+          <label class="form-label">N° Nota de Crédito *</label>
+          <input type="text" class="form-input" id="nc-numero" placeholder="0001-00001234">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Observaciones</label>
+          <textarea class="form-input" id="nc-obs" rows="2" style="resize:vertical" placeholder="Notas sobre la NC..."></textarea>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+          <button class="btn btn-outline" onclick="cerrarModalNC()">Cancelar</button>
+          <button class="btn btn-primary" onclick="confirmarNC()">Confirmar</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Fecha default hoy
+  document.getElementById('dev-fecha').value = HOY();
+  // Toggle notif
+  document.getElementById('dev-notif-wa').onchange = e =>
+    document.getElementById('dev-notif-wa-wrap').style.display = e.target.checked ? 'block' : 'none';
+  document.getElementById('dev-notif-mail').onchange = e =>
+    document.getElementById('dev-notif-mail-wrap').style.display = e.target.checked ? 'block' : 'none';
+
+  agregarItemDev(); // al menos 1 ítem
+
+  try {
+    DEV_DATA = await sbGet('devoluciones_proveedores', 'order=creado_en.desc&limit=500');
+    renderDEVKpis();
+    renderDEVTab();
+  } catch(e) {
+    // Tabla puede no existir aún — mostrar aviso con SQL
+    document.getElementById('devview-pendientes').innerHTML = `
+      <div style="margin-top:24px;background:var(--bg3);border:1px solid rgba(251,191,36,.2);border-radius:8px;padding:20px">
+        <p style="color:var(--yellow);font-family:var(--mono);font-size:11px;margin-bottom:12px">⚠ Tabla no encontrada. Ejecutá este SQL en Supabase:</p>
+        <pre style="font-family:var(--mono);font-size:10px;color:var(--text2);white-space:pre-wrap;line-height:1.6">${DEV_SQL_CREATE}</pre>
+        <button class="btn btn-outline btn-sm" style="margin-top:12px" onclick="navigator.clipboard.writeText(\`${DEV_SQL_CREATE}\`).then(()=>alert('Copiado!'))">📋 Copiar SQL</button>
+      </div>`;
+    ['devkpi-pend','devkpi-gest','devkpi-conf','devkpi-hoy'].forEach(id => {
+      const el2 = document.getElementById(id); if(el2) el2.textContent = '0';
+    });
+  }
+}
+
+const DEV_SQL_CREATE = `CREATE TABLE devoluciones_proveedores (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  proveedor TEXT NOT NULL,
+  remito TEXT,
+  fecha DATE NOT NULL,
+  motivo TEXT NOT NULL,
+  items JSONB NOT NULL DEFAULT '[]',
+  estado TEXT NOT NULL DEFAULT 'PENDIENTE',
+  nota_credito TEXT,
+  nc_obs TEXT,
+  obs TEXT,
+  registrado_por UUID REFERENCES usuarios(id),
+  confirmado_por UUID REFERENCES usuarios(id),
+  confirmado_en TIMESTAMPTZ,
+  creado_en TIMESTAMPTZ DEFAULT now()
+);`;
+
+function agregarItemDev() {
+  const list = document.getElementById('dev-items-list');
+  if (!list) return;
+  const idx = list.children.length;
+  const row = document.createElement('div');
+  row.className = 'dev-item-row';
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 2fr 80px 32px;gap:8px;align-items:center';
+  row.innerHTML = `
+    <input type="text" class="form-input dev-item-cod" placeholder="Código" style="font-size:12px">
+    <input type="text" class="form-input dev-item-nom" placeholder="Nombre del producto" style="font-size:12px">
+    <input type="number" class="form-input dev-item-qty" placeholder="Cant." min="1" style="font-size:12px">
+    <button onclick="this.closest('.dev-item-row').remove()" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;padding:0">✕</button>
+  `;
+  list.appendChild(row);
+}
+
+function leerItemsDev() {
+  const rows = document.querySelectorAll('.dev-item-row');
+  return Array.from(rows).map(r => ({
+    codigo: r.querySelector('.dev-item-cod').value.trim(),
+    nombre: r.querySelector('.dev-item-nom').value.trim(),
+    cantidad: parseInt(r.querySelector('.dev-item-qty').value) || 0,
+  })).filter(i => i.nombre);
+}
+
+function abrirModalNuevaDev() {
+  document.getElementById('modal-nueva-dev').style.display = 'flex';
+}
+function cerrarModalDev() {
+  document.getElementById('modal-nueva-dev').style.display = 'none';
+  // Reset form
+  ['dev-proveedor','dev-remito','dev-obs','dev-wa-num','dev-mail-addr'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.value = '';
+  });
+  document.getElementById('dev-motivo').value = '';
+  document.getElementById('dev-fecha').value = HOY();
+  document.getElementById('dev-items-list').innerHTML = '';
+  document.getElementById('dev-notif-wa').checked = false;
+  document.getElementById('dev-notif-mail').checked = false;
+  document.getElementById('dev-notif-wa-wrap').style.display = 'none';
+  document.getElementById('dev-notif-mail-wrap').style.display = 'none';
+  agregarItemDev();
+}
+
+async function guardarDevolucion() {
+  const proveedor = document.getElementById('dev-proveedor').value.trim();
+  const motivo    = document.getElementById('dev-motivo').value;
+  const fecha     = document.getElementById('dev-fecha').value;
+  const items     = leerItemsDev();
+
+  if (!proveedor) { alert('Ingresá el proveedor'); return; }
+  if (!motivo)    { alert('Seleccioná un motivo'); return; }
+  if (!items.length) { alert('Agregá al menos un producto'); return; }
+
+  const payload = {
+    proveedor,
+    remito:   document.getElementById('dev-remito').value.trim() || null,
+    fecha,
+    motivo,
+    items:    JSON.stringify(items),
+    obs:      document.getElementById('dev-obs').value.trim() || null,
+    estado:   'PENDIENTE',
+    registrado_por: SESSION.id,
+  };
+
+  try {
+    await sbPost('devoluciones_proveedores', payload);
+
+    // Notificaciones
+    const notifWA   = document.getElementById('dev-notif-wa').checked;
+    const notifMail = document.getElementById('dev-notif-mail').checked;
+    const resumen   = `Devolución registrada:\nProveedor: ${proveedor}\nFecha: ${fecha}\nMotivo: ${motivo}\nProductos: ${items.map(i=>`${i.nombre} (x${i.cantidad})`).join(', ')}`;
+
+    if (notifWA) {
+      const num = document.getElementById('dev-wa-num').value.trim();
+      if (num) {
+        const msg = encodeURIComponent(resumen);
+        window.open(`https://wa.me/${num}?text=${msg}`, '_blank');
+      }
+    }
+    if (notifMail) {
+      const addr = document.getElementById('dev-mail-addr').value.trim();
+      if (addr) {
+        const sub = encodeURIComponent(`Nueva devolución - ${proveedor}`);
+        const body = encodeURIComponent(resumen);
+        window.open(`mailto:${addr}?subject=${sub}&body=${body}`, '_blank');
+      }
+    }
+
+    cerrarModalDev();
+    DEV_DATA = await sbGet('devoluciones_proveedores', 'order=creado_en.desc&limit=500');
+    renderDEVKpis();
+    renderDEVTab();
+  } catch(e) {
+    alert('Error al guardar: ' + e.message);
+  }
+}
+
+function switchDEVTab(tab) {
+  DEV_TAB = tab;
+  ['pendientes','todas','confirmadas'].forEach(t => {
+    document.getElementById('devtab-'+t)?.classList.toggle('active', t === tab);
+    const v = document.getElementById('devview-'+t);
+    if (v) v.style.display = t === tab ? 'block' : 'none';
+  });
+  renderDEVTab();
+}
+
+function renderDEVKpis() {
+  const hoy = HOY();
+  const pend = DEV_DATA.filter(d => d.estado === 'PENDIENTE').length;
+  const gest = DEV_DATA.filter(d => d.estado === 'EN_GESTION').length;
+  const conf = DEV_DATA.filter(d => d.estado === 'CONFIRMADA').length;
+  const nuevas = DEV_DATA.filter(d => d.creado_en?.substring(0,10) === hoy).length;
+  document.getElementById('devkpi-pend').textContent = pend;
+  document.getElementById('devkpi-gest').textContent = gest;
+  document.getElementById('devkpi-conf').textContent = conf;
+  document.getElementById('devkpi-hoy').textContent  = nuevas;
+  if (pend > 0) document.getElementById('devkpi-pend').style.color = 'var(--red)';
+  if (gest > 0) document.getElementById('devkpi-gest').style.color = 'var(--yellow)';
+}
+
+function renderDEVTab() {
+  const filtros = {
+    pendientes:  d => ['PENDIENTE','EN_GESTION'].includes(d.estado),
+    todas:       d => true,
+    confirmadas: d => d.estado === 'CONFIRMADA',
+  };
+  const datos = DEV_DATA.filter(filtros[DEV_TAB] || (() => true));
+  const contenedor = document.getElementById('devview-' + DEV_TAB);
+  if (!contenedor) return;
+
+  // Filtros UI
+  const motivos = { VENCIDO:'Vencido', DEFECTUOSO:'Defectuoso', ERROR_PEDIDO:'Error pedido',
+    EXCESO_STOCK:'Exceso stock', PRECIO:'Precio', OTRO:'Otro' };
+
+  contenedor.innerHTML = `
+    <div style="display:flex;gap:10px;align-items:center;margin:16px 0;flex-wrap:wrap">
+      <input type="text" class="form-input" id="dev-search" placeholder="🔍 Proveedor, remito..." oninput="filtrarDEV()"
+        style="flex:1;min-width:180px;max-width:260px;font-size:12px">
+      <select class="form-input" id="dev-fil-motivo" onchange="filtrarDEV()" style="max-width:160px;font-size:12px">
+        <option value="">Todos los motivos</option>
+        ${Object.entries(motivos).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}
+      </select>
+      <input type="date" class="form-input" id="dev-fil-desde" onchange="filtrarDEV()" style="max-width:140px;font-size:12px">
+      <input type="date" class="form-input" id="dev-fil-hasta" onchange="filtrarDEV()" style="max-width:140px;font-size:12px">
+    </div>
+    <div id="dev-tabla-wrap"></div>
+  `;
+  renderDEVTabla(datos);
+}
+
+function filtrarDEV() {
+  const q      = document.getElementById('dev-search')?.value.toLowerCase() || '';
+  const motivo = document.getElementById('dev-fil-motivo')?.value || '';
+  const desde  = document.getElementById('dev-fil-desde')?.value || '';
+  const hasta  = document.getElementById('dev-fil-hasta')?.value || '';
+  const filtros = {
+    pendientes:  d => ['PENDIENTE','EN_GESTION'].includes(d.estado),
+    todas:       d => true,
+    confirmadas: d => d.estado === 'CONFIRMADA',
+  };
+  let datos = DEV_DATA.filter(filtros[DEV_TAB] || (() => true));
+  if (q)      datos = datos.filter(d => (d.proveedor+d.remito+'').toLowerCase().includes(q));
+  if (motivo) datos = datos.filter(d => d.motivo === motivo);
+  if (desde)  datos = datos.filter(d => d.fecha >= desde);
+  if (hasta)  datos = datos.filter(d => d.fecha <= hasta);
+  renderDEVTabla(datos);
+}
+
+const DEV_ESTADO_TAG = {
+  PENDIENTE:   'background:rgba(239,68,68,.15);color:var(--red)',
+  EN_GESTION:  'background:rgba(251,191,36,.12);color:var(--yellow)',
+  CONFIRMADA:  'background:rgba(0,217,126,.12);color:var(--green)',
+};
+const DEV_MOTIVO_LABEL = {
+  VENCIDO:'Vencido', DEFECTUOSO:'Defectuoso', ERROR_PEDIDO:'Error pedido',
+  EXCESO_STOCK:'Exceso stock', PRECIO:'Precio', OTRO:'Otro'
+};
+
+function renderDEVTabla(datos) {
+  const wrap = document.getElementById('dev-tabla-wrap');
+  if (!wrap) return;
+  if (!datos.length) {
+    wrap.innerHTML = `<div style="font-family:var(--mono);font-size:11px;color:var(--text3);padding:24px 0">Sin devoluciones en esta categoría.</div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="panel">
+      <div class="panel-body" style="padding:0">
+        <table class="data-table">
+          <thead><tr>
+            <th>Fecha</th><th>Proveedor</th><th>Remito</th><th>Motivo</th>
+            <th>Productos</th><th>Estado</th><th>Nota C.</th><th>Acciones</th>
+          </tr></thead>
+          <tbody>
+            ${datos.map(d => {
+              const items = (() => { try { return JSON.parse(d.items||'[]'); } catch(e){ return []; } })();
+              const itemsStr = items.map(i=>`${i.nombre}${i.cantidad?' (x'+i.cantidad+')':''}`).join(', ');
+              const estadoStyle = DEV_ESTADO_TAG[d.estado] || '';
+              const motivoLabel = DEV_MOTIVO_LABEL[d.motivo] || d.motivo;
+              const acciones = SESSION.rol !== 'solo_lectura' ? `
+                ${d.estado === 'PENDIENTE' ? `<button class="btn btn-outline btn-sm" onclick="cambiarEstadoDEV('${d.id}','EN_GESTION')">▶ Gestionar</button>` : ''}
+                ${d.estado === 'EN_GESTION' && !d.nota_credito ? `<button class="btn btn-outline btn-sm" onclick="abrirModalNC('${d.id}')">📄 NC</button>` : ''}
+                ${d.nota_credito && d.estado !== 'CONFIRMADA' ? `<button class="btn btn-outline btn-sm" onclick="cambiarEstadoDEV('${d.id}','CONFIRMADA')">✓ Confirmar</button>` : ''}
+              ` : '—';
+              return `<tr>
+                <td style="font-family:var(--mono);font-size:11px">${d.fecha||'—'}</td>
+                <td style="font-weight:600">${d.proveedor}</td>
+                <td style="font-family:var(--mono);font-size:11px">${d.remito||'—'}</td>
+                <td><span style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:10px;background:rgba(79,127,255,.1);color:var(--accent)">${motivoLabel}</span></td>
+                <td style="font-size:11px;color:var(--text2);max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${itemsStr}">${itemsStr||'—'}</td>
+                <td><span style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:10px;${estadoStyle}">${d.estado}</span></td>
+                <td style="font-family:var(--mono);font-size:11px">${d.nota_credito || '—'}</td>
+                <td style="white-space:nowrap">${acciones}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+async function cambiarEstadoDEV(id, nuevoEstado) {
+  try {
+    await sbPatch('devoluciones_proveedores', `id=eq.${id}`, { estado: nuevoEstado });
+    DEV_DATA = await sbGet('devoluciones_proveedores', 'order=creado_en.desc&limit=500');
+    renderDEVKpis();
+    renderDEVTab();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+function abrirModalNC(id) {
+  document.getElementById('nc-dev-id').value = id;
+  document.getElementById('nc-numero').value = '';
+  document.getElementById('nc-obs').value = '';
+  document.getElementById('modal-nc-dev').style.display = 'flex';
+}
+function cerrarModalNC() {
+  document.getElementById('modal-nc-dev').style.display = 'none';
+}
+async function confirmarNC() {
+  const id = document.getElementById('nc-dev-id').value;
+  const nc = document.getElementById('nc-numero').value.trim();
+  if (!nc) { alert('Ingresá el número de nota de crédito'); return; }
+  try {
+    await sbPatch('devoluciones_proveedores', `id=eq.${id}`, {
+      nota_credito: nc,
+      nc_obs: document.getElementById('nc-obs').value.trim() || null,
+      estado: 'EN_GESTION',
+    });
+    cerrarModalNC();
+    DEV_DATA = await sbGet('devoluciones_proveedores', 'order=creado_en.desc&limit=500');
+    renderDEVKpis();
+    renderDEVTab();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+function exportarDevCSV() {
+  if (!DEV_DATA.length) { alert('No hay datos para exportar'); return; }
+  const rows = [['Fecha','Proveedor','Remito','Motivo','Productos','Estado','Nota Crédito','Observaciones']];
+  DEV_DATA.forEach(d => {
+    const items = (() => { try { return JSON.parse(d.items||'[]'); } catch(e){ return []; } })();
+    rows.push([
+      d.fecha||'', d.proveedor, d.remito||'', DEV_MOTIVO_LABEL[d.motivo]||d.motivo,
+      items.map(i=>`${i.nombre} x${i.cantidad}`).join(' | '),
+      d.estado, d.nota_credito||'', d.obs||''
+    ]);
+  });
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(csv);
+  a.download = `devoluciones_${HOY()}.csv`;
+  a.click();
+}
+
 function renderPlaceholder(el, page) {
   if (page === '_denied') {
     el.innerHTML = `<div class="placeholder-page"><div class="big-icon">🔒</div><h2>Acceso restringido</h2><p>// NO TENÉS PERMISOS PARA ESTA SECCIÓN</p></div>`;
