@@ -4367,14 +4367,15 @@ function renderBILogistica(el) {
         <h2 style="font-size:20px;font-weight:700;margin-bottom:2px">BI — Logística</h2>
         <p style="color:var(--text3);font-family:var(--mono);font-size:11px">// TABLERO DE INDICADORES LOGÍSTICOS · POWER BI</p>
       </div>
+      <a href="https://app.powerbi.com/view?r=eyJrIjoiNTg1MDU4ODktYjc5ZC00MTNkLWEyYTMtOGMzMjRjNGViMjVlIiwidCI6IjkxZmIyN2ViLTk3MTAtNDFjMS04ZDY0LWRmMmM0OThiMDUwZCIsImMiOjR9" target="_blank" class="btn btn-outline btn-sm">↗ Abrir en Power BI</a>
     </div>
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:60px 40px;text-align:center;">
-      <div style="font-size:48px;margin-bottom:20px">📈</div>
-      <div style="font-family:var(--mono);font-size:12px;letter-spacing:2px;color:var(--violet);margin-bottom:12px">EN DESARROLLO</div>
-      <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:8px">Tablero de Logística</div>
-      <div style="color:var(--text2);font-size:13px;max-width:400px;margin:0 auto">
-        El tablero de indicadores logísticos está en desarrollo. Una vez publicado en Power BI, se integrará automáticamente aquí.
-      </div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;overflow:hidden;width:100%;position:relative;">
+      <iframe
+        title="Tablero de Logística"
+        src="https://app.powerbi.com/view?r=eyJrIjoiNTg1MDU4ODktYjc5ZC00MTNkLWEyYTMtOGMzMjRjNGViMjVlIiwidCI6IjkxZmIyN2ViLTk3MTAtNDFjMS04ZDY0LWRmMmM0OThiMDUwZCIsImMiOjR9"
+        style="width:100%;height:calc(100vh - 160px);min-height:600px;border:none;display:block;"
+        allowFullScreen="true">
+      </iframe>
     </div>
   `;
 }
