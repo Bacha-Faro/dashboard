@@ -782,7 +782,9 @@ async function login() {
     });
 
     setLoading(false);
-    mostrarApp();
+    // Ocultar login y mostrar splash antes de entrar
+    document.getElementById('login-screen').style.display = 'none';
+    mostrarSplash(() => mostrarApp());
 
   } catch (e) {
     setLoading(false);
