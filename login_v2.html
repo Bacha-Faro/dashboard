@@ -559,6 +559,9 @@ body::after {
       <div class="nav-item" onclick="navTo('egresos',this)">
         <span class="nav-icon">↩</span> Devoluciones
       </div>
+      <div class="nav-item" onclick="navTo('reclamos',this)">
+        <span class="nav-icon">📋</span> Reclamos
+      </div>
       <div class="nav-section-label">// PERSONAS</div>
       <div class="nav-item" onclick="navTo('comisionistas',this)">
         <span class="nav-icon">🚛</span> Comisionistas
@@ -876,6 +879,7 @@ function navTo(page, el) {
     proveedores:    () => renderProveedores(mc),
     diferencias:    () => renderDiferencias(mc),
     egresos:        () => renderEgresos(mc),
+    reclamos:       () => renderReclamos(mc),
     bi_compras:     () => renderBICompras(mc),
     bi_logistica:   () => renderBILogistica(mc),
   };
@@ -2070,6 +2074,643 @@ function exportarDevCSV() {
   const a = document.createElement('a');
   a.href = 'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(csv);
   a.download = `devoluciones_${HOY()}.csv`;
+  a.click();
+}
+
+// ══════════════════════════════════════════════
+//  RECLAMOS A PROVEEDORES
+// ══════════════════════════════════════════════
+let REC_DATA = [];
+let REC_TAB  = 'pendientes';
+
+async function renderReclamos(el) {
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;margin-bottom:2px">Reclamos a Proveedores</h2>
+        <p style="color:var(--text3);font-family:var(--mono);font-size:11px">// CONTROL DE NOTAS DE RECLAMO Y MATCH CON NOTAS DE CRÉDITO</p>
+      </div>
+      <div style="display:flex;gap:10px">
+        ${SESSION.rol !== 'solo_lectura' ? `<button class="btn btn-primary" onclick="abrirModalNuevoRec()">+ Nuevo Reclamo</button>` : ''}
+        <button class="btn btn-outline btn-sm" onclick="exportarRecCSV()">↓ CSV</button>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin:16px -28px 0;padding:0 28px;">
+      <div class="b-tab active" id="rectab-pendientes"  onclick="switchRECTab('pendientes')">PENDIENTES</div>
+      <div class="b-tab" id="rectab-parciales"   onclick="switchRECTab('parciales')">PARCIALES</div>
+      <div class="b-tab" id="rectab-cerrados"    onclick="switchRECTab('cerrados')">CERRADOS</div>
+      <div class="b-tab" id="rectab-todos"       onclick="switchRECTab('todos')">TODOS</div>
+    </div>
+
+    <div class="kpi-grid" style="margin-top:20px">
+      <div class="kpi-card red">
+        <div class="kpi-label">// PENDIENTES</div>
+        <div class="kpi-value" id="reckpi-pend">…</div>
+        <div class="kpi-sub">sin acreditar</div>
+      </div>
+      <div class="kpi-card yellow">
+        <div class="kpi-label">// PARCIALES</div>
+        <div class="kpi-value" id="reckpi-parc">…</div>
+        <div class="kpi-sub">acreditación parcial</div>
+      </div>
+      <div class="kpi-card green">
+        <div class="kpi-label">// CERRADOS</div>
+        <div class="kpi-value" id="reckpi-cerr">…</div>
+        <div class="kpi-sub">este mes</div>
+      </div>
+      <div class="kpi-card blue">
+        <div class="kpi-label">// MONTO PENDIENTE</div>
+        <div class="kpi-value" id="reckpi-monto" style="font-size:26px">…</div>
+        <div class="kpi-sub">por acreditar en $</div>
+      </div>
+    </div>
+
+    <div id="recview-pendientes"></div>
+    <div id="recview-parciales"  style="display:none"></div>
+    <div id="recview-cerrados"   style="display:none"></div>
+    <div id="recview-todos"      style="display:none"></div>
+
+    <!-- MODAL NUEVO RECLAMO -->
+    <div id="modal-nuevo-rec" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:28px;width:620px;max-width:96vw;max-height:92vh;overflow-y:auto;position:relative">
+        <button onclick="cerrarModalRec()" style="position:absolute;top:12px;right:16px;background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer">✕</button>
+        <h3 style="font-size:16px;font-weight:700;margin-bottom:20px">📋 Nuevo Reclamo</h3>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label class="form-label">N° Nota de Reclamo (ERP) *</label>
+            <input type="text" class="form-input" id="rec-nr" placeholder="NR-0001">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Fecha del reclamo *</label>
+            <input type="date" class="form-input" id="rec-fecha">
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label class="form-label">Proveedor *</label>
+            <input type="text" class="form-input" id="rec-proveedor" placeholder="Nombre del proveedor">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Tipo de reclamo *</label>
+            <select class="form-input" id="rec-tipo">
+              <option value="">— Seleccionar —</option>
+              <option value="FALTANTE">Faltante de mercadería</option>
+              <option value="ROTURA">Rotura / producto dañado</option>
+              <option value="MAL_ENVIADO">Producto mal enviado</option>
+              <option value="PRECIO">Diferencia de precio</option>
+              <option value="BONIFICACION">Bonificación no aplicada</option>
+              <option value="OTRO">Otro</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label class="form-label">N° Factura / Remito reclamado</label>
+            <input type="text" class="form-input" id="rec-factura" placeholder="0001-00012345">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Fecha de la factura</label>
+            <input type="date" class="form-input" id="rec-fecha-fac">
+          </div>
+        </div>
+
+        <!-- PRODUCTOS -->
+        <div class="form-group" style="margin-top:4px">
+          <label class="form-label" style="display:flex;align-items:center;justify-content:space-between">
+            <span>Productos involucrados *</span>
+            <button class="btn btn-outline btn-sm" onclick="agregarItemRec()">+ Agregar</button>
+          </label>
+          <div style="background:var(--bg3);border-radius:8px;padding:10px;margin-top:6px">
+            <div style="display:grid;grid-template-columns:1fr 2fr 80px 100px 32px;gap:6px;margin-bottom:6px">
+              <span style="font-family:var(--mono);font-size:9px;color:var(--text3)">CÓDIGO</span>
+              <span style="font-family:var(--mono);font-size:9px;color:var(--text3)">NOMBRE</span>
+              <span style="font-family:var(--mono);font-size:9px;color:var(--text3)">CANT.</span>
+              <span style="font-family:var(--mono);font-size:9px;color:var(--text3)">P. UNITARIO</span>
+              <span></span>
+            </div>
+            <div id="rec-items-list"></div>
+          </div>
+          <div style="display:flex;justify-content:flex-end;margin-top:8px;gap:8px;align-items:center">
+            <span style="font-family:var(--mono);font-size:11px;color:var(--text3)">TOTAL CALCULADO:</span>
+            <span id="rec-total-calc" style="font-family:var(--mono);font-size:16px;font-weight:900;color:var(--accent)">$ 0,00</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Observaciones</label>
+          <textarea class="form-input" id="rec-obs" rows="2" placeholder="Detalles del reclamo..." style="resize:vertical"></textarea>
+        </div>
+
+        <!-- NOTIFICACIONES -->
+        <div style="background:var(--bg3);border-radius:8px;padding:12px;margin-top:4px">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:10px">// NOTIFICAR A COMPRAS</div>
+          <div style="display:flex;gap:20px;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text2)">
+              <input type="checkbox" id="rec-notif-wa" style="accent-color:var(--green)">
+              <span>📱 WhatsApp</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text2)">
+              <input type="checkbox" id="rec-notif-mail" style="accent-color:var(--accent)">
+              <span>✉️ Email</span>
+            </label>
+          </div>
+          <div id="rec-wa-wrap" style="display:none;margin-top:10px">
+            <input type="text" class="form-input" id="rec-wa-num" placeholder="Número WhatsApp (ej: 5493584123456)" style="font-size:12px">
+          </div>
+          <div id="rec-mail-wrap" style="display:none;margin-top:10px">
+            <input type="email" class="form-input" id="rec-mail-addr" placeholder="compras@drogueria.com" style="font-size:12px">
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+          <button class="btn btn-outline" onclick="cerrarModalRec()">Cancelar</button>
+          <button class="btn btn-primary" onclick="guardarReclamo()">Registrar Reclamo</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL ADJUNTAR NC -->
+    <div id="modal-nc-rec" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:28px;width:440px;max-width:96vw;position:relative">
+        <button onclick="cerrarModalNCRec()" style="position:absolute;top:12px;right:16px;background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer">✕</button>
+        <h3 style="font-size:16px;font-weight:700;margin-bottom:6px">📄 Adjuntar Nota de Crédito</h3>
+        <div id="rec-nc-resumen" style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-bottom:16px"></div>
+        <input type="hidden" id="nc-rec-id">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label class="form-label">N° Nota de Crédito *</label>
+            <input type="text" class="form-input" id="nc-rec-numero" placeholder="0001-00001234">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Monto de la NC *</label>
+            <input type="number" class="form-input" id="nc-rec-monto" placeholder="0.00" min="0" step="0.01">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Fecha de la NC</label>
+          <input type="date" class="form-input" id="nc-rec-fecha">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Observaciones</label>
+          <textarea class="form-input" id="nc-rec-obs" rows="2" style="resize:vertical" placeholder="Notas..."></textarea>
+        </div>
+        <div id="nc-rec-saldo-wrap" style="background:var(--bg3);border-radius:8px;padding:12px;margin:10px 0;font-family:var(--mono);font-size:11px"></div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+          <button class="btn btn-outline" onclick="cerrarModalNCRec()">Cancelar</button>
+          <button class="btn btn-primary" onclick="confirmarNCRec()">Adjuntar NC</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL DETALLE -->
+    <div id="modal-det-rec" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:28px;width:600px;max-width:96vw;max-height:90vh;overflow-y:auto;position:relative">
+        <button onclick="document.getElementById('modal-det-rec').style.display='none'" style="position:absolute;top:12px;right:16px;background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer">✕</button>
+        <div id="modal-det-rec-body"></div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('rec-fecha').value = HOY();
+  document.getElementById('rec-notif-wa').onchange   = e => document.getElementById('rec-wa-wrap').style.display   = e.target.checked ? 'block' : 'none';
+  document.getElementById('rec-notif-mail').onchange = e => document.getElementById('rec-mail-wrap').style.display = e.target.checked ? 'block' : 'none';
+  agregarItemRec();
+
+  try {
+    REC_DATA = await sbGet('reclamos_proveedores', 'order=creado_en.desc&limit=500');
+    renderRECKpis();
+    renderRECTab();
+  } catch(e) {
+    document.getElementById('recview-pendientes').innerHTML = `
+      <div style="margin-top:24px;background:var(--bg3);border:1px solid rgba(251,191,36,.2);border-radius:8px;padding:20px">
+        <p style="color:var(--yellow);font-family:var(--mono);font-size:11px;margin-bottom:12px">⚠ Tabla no encontrada. Ejecutá este SQL en Supabase:</p>
+        <pre style="font-family:var(--mono);font-size:9.5px;color:var(--text2);white-space:pre-wrap;line-height:1.7">${REC_SQL_CREATE}</pre>
+        <button class="btn btn-outline btn-sm" style="margin-top:12px"
+          onclick="navigator.clipboard.writeText(\`${REC_SQL_CREATE}\`).then(()=>alert('SQL copiado al portapapeles'))">📋 Copiar SQL</button>
+      </div>`;
+    ['reckpi-pend','reckpi-parc','reckpi-cerr'].forEach(id => { const e2=document.getElementById(id); if(e2) e2.textContent='0'; });
+    const m = document.getElementById('reckpi-monto'); if(m) m.textContent='$ 0';
+  }
+}
+
+const REC_SQL_CREATE = `CREATE TABLE reclamos_proveedores (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  nr_numero TEXT NOT NULL,
+  proveedor TEXT NOT NULL,
+  fecha DATE NOT NULL,
+  tipo TEXT NOT NULL,
+  factura TEXT,
+  fecha_factura DATE,
+  items JSONB NOT NULL DEFAULT '[]',
+  monto_reclamado NUMERIC(12,2) NOT NULL DEFAULT 0,
+  estado TEXT NOT NULL DEFAULT 'PENDIENTE',
+  obs TEXT,
+  notas_credito JSONB NOT NULL DEFAULT '[]',
+  monto_acreditado NUMERIC(12,2) NOT NULL DEFAULT 0,
+  registrado_por UUID REFERENCES usuarios(id),
+  creado_en TIMESTAMPTZ DEFAULT now()
+);`;
+
+/* ── ITEMS DEL RECLAMO ── */
+function agregarItemRec() {
+  const list = document.getElementById('rec-items-list');
+  if (!list) return;
+  const row = document.createElement('div');
+  row.className = 'rec-item-row';
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 2fr 80px 100px 32px;gap:6px;align-items:center;margin-bottom:6px';
+  row.innerHTML = `
+    <input type="text"   class="form-input rec-item-cod" placeholder="Código"  style="font-size:11px">
+    <input type="text"   class="form-input rec-item-nom" placeholder="Nombre"   style="font-size:11px">
+    <input type="number" class="form-input rec-item-qty" placeholder="Cant."    style="font-size:11px" min="1" oninput="recalcularTotal()">
+    <input type="number" class="form-input rec-item-pu"  placeholder="$ Unit."  style="font-size:11px" min="0" step="0.01" oninput="recalcularTotal()">
+    <button onclick="this.closest('.rec-item-row').remove();recalcularTotal()" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;padding:0">✕</button>
+  `;
+  list.appendChild(row);
+}
+
+function recalcularTotal() {
+  let total = 0;
+  document.querySelectorAll('.rec-item-row').forEach(r => {
+    const qty = parseFloat(r.querySelector('.rec-item-qty')?.value) || 0;
+    const pu  = parseFloat(r.querySelector('.rec-item-pu')?.value)  || 0;
+    total += qty * pu;
+  });
+  const el = document.getElementById('rec-total-calc');
+  if (el) el.textContent = '$ ' + total.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2});
+  return total;
+}
+
+function leerItemsRec() {
+  return Array.from(document.querySelectorAll('.rec-item-row')).map(r => ({
+    codigo:    r.querySelector('.rec-item-cod').value.trim(),
+    nombre:    r.querySelector('.rec-item-nom').value.trim(),
+    cantidad:  parseFloat(r.querySelector('.rec-item-qty').value) || 0,
+    precio_unitario: parseFloat(r.querySelector('.rec-item-pu').value) || 0,
+    subtotal:  (parseFloat(r.querySelector('.rec-item-qty').value)||0) * (parseFloat(r.querySelector('.rec-item-pu').value)||0),
+  })).filter(i => i.nombre);
+}
+
+/* ── MODAL NUEVO RECLAMO ── */
+function abrirModalNuevoRec() {
+  document.getElementById('modal-nuevo-rec').style.display = 'flex';
+}
+function cerrarModalRec() {
+  document.getElementById('modal-nuevo-rec').style.display = 'none';
+  ['rec-nr','rec-proveedor','rec-factura','rec-obs','rec-wa-num','rec-mail-addr'].forEach(id => {
+    const e = document.getElementById(id); if(e) e.value = '';
+  });
+  document.getElementById('rec-tipo').value = '';
+  document.getElementById('rec-fecha').value = HOY();
+  document.getElementById('rec-fecha-fac').value = '';
+  document.getElementById('rec-items-list').innerHTML = '';
+  document.getElementById('rec-total-calc').textContent = '$ 0,00';
+  document.getElementById('rec-notif-wa').checked = false;
+  document.getElementById('rec-notif-mail').checked = false;
+  document.getElementById('rec-wa-wrap').style.display = 'none';
+  document.getElementById('rec-mail-wrap').style.display = 'none';
+  agregarItemRec();
+}
+
+async function guardarReclamo() {
+  const nr        = document.getElementById('rec-nr').value.trim();
+  const proveedor = document.getElementById('rec-proveedor').value.trim();
+  const tipo      = document.getElementById('rec-tipo').value;
+  const fecha     = document.getElementById('rec-fecha').value;
+  const items     = leerItemsRec();
+  const monto     = recalcularTotal();
+
+  if (!nr)        { alert('Ingresá el N° de Nota de Reclamo'); return; }
+  if (!proveedor) { alert('Ingresá el proveedor'); return; }
+  if (!tipo)      { alert('Seleccioná el tipo de reclamo'); return; }
+  if (!items.length) { alert('Agregá al menos un producto'); return; }
+  if (monto <= 0) { alert('El monto calculado debe ser mayor a 0. Verificá cantidades y precios.'); return; }
+
+  const payload = {
+    nr_numero:       nr,
+    proveedor,
+    fecha,
+    tipo,
+    factura:         document.getElementById('rec-factura').value.trim() || null,
+    fecha_factura:   document.getElementById('rec-fecha-fac').value || null,
+    items:           JSON.stringify(items),
+    monto_reclamado: monto,
+    monto_acreditado: 0,
+    estado:          'PENDIENTE',
+    notas_credito:   JSON.stringify([]),
+    obs:             document.getElementById('rec-obs').value.trim() || null,
+    registrado_por:  SESSION.id,
+  };
+
+  try {
+    await sbPost('reclamos_proveedores', payload);
+
+    const resumen = `Nuevo reclamo registrado:\nNR: ${nr}\nProveedor: ${proveedor}\nTipo: ${REC_TIPO_LABEL[tipo]||tipo}\nMonto: $${monto.toLocaleString('es-AR',{minimumFractionDigits:2})}\nProductos: ${items.map(i=>`${i.nombre} (x${i.cantidad} @ $${i.precio_unitario})`).join(', ')}`;
+    if (document.getElementById('rec-notif-wa').checked) {
+      const num = document.getElementById('rec-wa-num').value.trim();
+      if (num) window.open(`https://wa.me/${num}?text=${encodeURIComponent(resumen)}`, '_blank');
+    }
+    if (document.getElementById('rec-notif-mail').checked) {
+      const addr = document.getElementById('rec-mail-addr').value.trim();
+      if (addr) window.open(`mailto:${addr}?subject=${encodeURIComponent('Nuevo reclamo - '+proveedor)}&body=${encodeURIComponent(resumen)}`, '_blank');
+    }
+
+    cerrarModalRec();
+    REC_DATA = await sbGet('reclamos_proveedores', 'order=creado_en.desc&limit=500');
+    renderRECKpis();
+    renderRECTab();
+  } catch(e) { alert('Error al guardar: ' + e.message); }
+}
+
+/* ── TABS / FILTROS ── */
+function switchRECTab(tab) {
+  REC_TAB = tab;
+  ['pendientes','parciales','cerrados','todos'].forEach(t => {
+    document.getElementById('rectab-'+t)?.classList.toggle('active', t === tab);
+    const v = document.getElementById('recview-'+t);
+    if (v) v.style.display = t === tab ? 'block' : 'none';
+  });
+  renderRECTab();
+}
+
+const REC_TIPO_LABEL = {
+  FALTANTE:'Faltante', ROTURA:'Rotura', MAL_ENVIADO:'Mal enviado',
+  PRECIO:'Precio', BONIFICACION:'Bonificación', OTRO:'Otro'
+};
+const REC_ESTADO_STYLE = {
+  PENDIENTE:  'background:rgba(239,68,68,.15);color:var(--red)',
+  PARCIAL:    'background:rgba(251,191,36,.12);color:var(--yellow)',
+  CERRADO:    'background:rgba(0,217,126,.12);color:var(--green)',
+};
+
+function renderRECKpis() {
+  const mes = HOY().substring(0,7);
+  const pend = REC_DATA.filter(r => r.estado === 'PENDIENTE').length;
+  const parc = REC_DATA.filter(r => r.estado === 'PARCIAL').length;
+  const cerr = REC_DATA.filter(r => r.estado === 'CERRADO' && r.creado_en?.substring(0,7) === mes).length;
+  const montoPend = REC_DATA
+    .filter(r => r.estado !== 'CERRADO')
+    .reduce((s,r) => s + (parseFloat(r.monto_reclamado)||0) - (parseFloat(r.monto_acreditado)||0), 0);
+
+  document.getElementById('reckpi-pend').textContent  = pend;
+  document.getElementById('reckpi-parc').textContent  = parc;
+  document.getElementById('reckpi-cerr').textContent  = cerr;
+  document.getElementById('reckpi-monto').textContent = '$ ' + montoPend.toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:0});
+  if (pend > 0) document.getElementById('reckpi-pend').style.color  = 'var(--red)';
+  if (parc > 0) document.getElementById('reckpi-parc').style.color  = 'var(--yellow)';
+  if (montoPend > 0) document.getElementById('reckpi-monto').style.color = 'var(--red)';
+}
+
+function renderRECTab() {
+  const filtros = {
+    pendientes: r => r.estado === 'PENDIENTE',
+    parciales:  r => r.estado === 'PARCIAL',
+    cerrados:   r => r.estado === 'CERRADO',
+    todos:      r => true,
+  };
+  const datos = REC_DATA.filter(filtros[REC_TAB] || (() => true));
+  const cont  = document.getElementById('recview-' + REC_TAB);
+  if (!cont) return;
+
+  cont.innerHTML = `
+    <div style="display:flex;gap:10px;align-items:center;margin:16px 0;flex-wrap:wrap">
+      <input type="text" class="form-input" id="rec-search" placeholder="🔍 Proveedor, NR, factura..."
+        oninput="filtrarREC()" style="flex:1;min-width:180px;max-width:260px;font-size:12px">
+      <select class="form-input" id="rec-fil-tipo" onchange="filtrarREC()" style="max-width:160px;font-size:12px">
+        <option value="">Todos los tipos</option>
+        ${Object.entries(REC_TIPO_LABEL).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}
+      </select>
+      <input type="date" class="form-input" id="rec-fil-desde" onchange="filtrarREC()" style="max-width:140px;font-size:12px">
+      <input type="date" class="form-input" id="rec-fil-hasta" onchange="filtrarREC()" style="max-width:140px;font-size:12px">
+    </div>
+    <div id="rec-tabla-wrap"></div>
+  `;
+  renderRECTabla(datos);
+}
+
+function filtrarREC() {
+  const q     = document.getElementById('rec-search')?.value.toLowerCase() || '';
+  const tipo  = document.getElementById('rec-fil-tipo')?.value || '';
+  const desde = document.getElementById('rec-fil-desde')?.value || '';
+  const hasta = document.getElementById('rec-fil-hasta')?.value || '';
+  const filtros = {
+    pendientes: r => r.estado === 'PENDIENTE',
+    parciales:  r => r.estado === 'PARCIAL',
+    cerrados:   r => r.estado === 'CERRADO',
+    todos:      r => true,
+  };
+  let datos = REC_DATA.filter(filtros[REC_TAB] || (() => true));
+  if (q)     datos = datos.filter(r => (r.proveedor+r.nr_numero+r.factura+'').toLowerCase().includes(q));
+  if (tipo)  datos = datos.filter(r => r.tipo === tipo);
+  if (desde) datos = datos.filter(r => r.fecha >= desde);
+  if (hasta) datos = datos.filter(r => r.fecha <= hasta);
+  renderRECTabla(datos);
+}
+
+function renderRECTabla(datos) {
+  const wrap = document.getElementById('rec-tabla-wrap');
+  if (!wrap) return;
+  if (!datos.length) {
+    wrap.innerHTML = `<div style="font-family:var(--mono);font-size:11px;color:var(--text3);padding:24px 0">Sin reclamos en esta categoría.</div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="panel">
+      <div class="panel-body" style="padding:0">
+        <table class="data-table">
+          <thead><tr>
+            <th>NR</th><th>Fecha</th><th>Proveedor</th><th>Tipo</th><th>Factura</th>
+            <th>Reclamado</th><th>Acreditado</th><th>Saldo</th><th>Estado</th><th>Acciones</th>
+          </tr></thead>
+          <tbody>
+            ${datos.map(r => {
+              const reclamado   = parseFloat(r.monto_reclamado)  || 0;
+              const acreditado  = parseFloat(r.monto_acreditado) || 0;
+              const saldo       = reclamado - acreditado;
+              const estadoStyle = REC_ESTADO_STYLE[r.estado] || '';
+              const ncs         = (() => { try { return JSON.parse(r.notas_credito||'[]'); } catch(e){ return []; } })();
+              const acciones = SESSION.rol !== 'solo_lectura' ? `
+                <button class="btn btn-outline btn-sm" onclick="verDetalleRec('${r.id}')" title="Ver detalle">👁</button>
+                ${r.estado !== 'CERRADO' ? `<button class="btn btn-outline btn-sm" onclick="abrirModalNCRec('${r.id}')" title="Adjuntar NC">📄 NC</button>` : ''}
+              ` : `<button class="btn btn-outline btn-sm" onclick="verDetalleRec('${r.id}')">👁</button>`;
+              return `<tr>
+                <td style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--accent)">${r.nr_numero}</td>
+                <td style="font-family:var(--mono);font-size:11px">${r.fecha||'—'}</td>
+                <td style="font-weight:600">${r.proveedor}</td>
+                <td><span style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:10px;background:rgba(79,127,255,.1);color:var(--accent)">${REC_TIPO_LABEL[r.tipo]||r.tipo}</span></td>
+                <td style="font-family:var(--mono);font-size:11px">${r.factura||'—'}</td>
+                <td style="font-family:var(--mono);font-size:11px;font-weight:700">$${reclamado.toLocaleString('es-AR',{minimumFractionDigits:2})}</td>
+                <td style="font-family:var(--mono);font-size:11px;color:var(--green)">$${acreditado.toLocaleString('es-AR',{minimumFractionDigits:2})}</td>
+                <td style="font-family:var(--mono);font-size:11px;font-weight:700;color:${saldo>0?'var(--red)':'var(--green)'}">$${saldo.toLocaleString('es-AR',{minimumFractionDigits:2})}</td>
+                <td><span style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:10px;${estadoStyle}">${r.estado}</span></td>
+                <td style="white-space:nowrap">${acciones}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+/* ── MODAL NC ── */
+function abrirModalNCRec(id) {
+  const rec = REC_DATA.find(r => r.id === id);
+  if (!rec) return;
+  const reclamado  = parseFloat(rec.monto_reclamado)  || 0;
+  const acreditado = parseFloat(rec.monto_acreditado) || 0;
+  const saldo      = reclamado - acreditado;
+  document.getElementById('nc-rec-id').value = id;
+  document.getElementById('nc-rec-numero').value = '';
+  document.getElementById('nc-rec-monto').value  = '';
+  document.getElementById('nc-rec-fecha').value  = HOY();
+  document.getElementById('nc-rec-obs').value    = '';
+  document.getElementById('rec-nc-resumen').innerHTML =
+    `NR: <b style="color:var(--accent)">${rec.nr_numero}</b> · ${rec.proveedor} · ` +
+    `Reclamado: <b style="color:white">$${reclamado.toLocaleString('es-AR',{minimumFractionDigits:2})}</b> · ` +
+    `Ya acreditado: <b style="color:var(--green)">$${acreditado.toLocaleString('es-AR',{minimumFractionDigits:2})}</b>`;
+  document.getElementById('nc-rec-saldo-wrap').innerHTML =
+    `<span style="color:var(--text3)">Saldo pendiente: </span>` +
+    `<span style="color:${saldo>0?'var(--red)':'var(--green)'};font-weight:900">$${saldo.toLocaleString('es-AR',{minimumFractionDigits:2})}</span>`;
+  document.getElementById('modal-nc-rec').style.display = 'flex';
+}
+function cerrarModalNCRec() {
+  document.getElementById('modal-nc-rec').style.display = 'none';
+}
+
+async function confirmarNCRec() {
+  const id     = document.getElementById('nc-rec-id').value;
+  const numero = document.getElementById('nc-rec-numero').value.trim();
+  const monto  = parseFloat(document.getElementById('nc-rec-monto').value) || 0;
+  if (!numero)     { alert('Ingresá el número de NC'); return; }
+  if (monto <= 0)  { alert('El monto de la NC debe ser mayor a 0'); return; }
+
+  const rec = REC_DATA.find(r => r.id === id);
+  if (!rec) return;
+
+  const ncs = (() => { try { return JSON.parse(rec.notas_credito||'[]'); } catch(e){ return []; } })();
+  ncs.push({
+    numero,
+    monto,
+    fecha:   document.getElementById('nc-rec-fecha').value || HOY(),
+    obs:     document.getElementById('nc-rec-obs').value.trim() || null,
+    cargado_por: SESSION.username,
+    cargado_en:  new Date().toISOString(),
+  });
+
+  const nuevoAcreditado = (parseFloat(rec.monto_acreditado)||0) + monto;
+  const reclamado = parseFloat(rec.monto_reclamado)||0;
+  const nuevoEstado = nuevoAcreditado >= reclamado ? 'CERRADO' : 'PARCIAL';
+
+  try {
+    await sbPatch('reclamos_proveedores', `id=eq.${id}`, {
+      notas_credito:    JSON.stringify(ncs),
+      monto_acreditado: nuevoAcreditado,
+      estado:           nuevoEstado,
+    });
+    cerrarModalNCRec();
+    REC_DATA = await sbGet('reclamos_proveedores', 'order=creado_en.desc&limit=500');
+    renderRECKpis();
+    renderRECTab();
+
+    if (nuevoEstado === 'CERRADO') {
+      setTimeout(() => alert(`✅ Reclamo ${rec.nr_numero} CERRADO — monto completamente acreditado.`), 100);
+    } else {
+      const saldo = reclamado - nuevoAcreditado;
+      setTimeout(() => alert(`📄 NC adjuntada. Saldo pendiente: $${saldo.toLocaleString('es-AR',{minimumFractionDigits:2})}`), 100);
+    }
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+/* ── DETALLE ── */
+function verDetalleRec(id) {
+  const rec = REC_DATA.find(r => r.id === id);
+  if (!rec) return;
+  const items = (() => { try { return JSON.parse(rec.items||'[]'); } catch(e){ return []; } })();
+  const ncs   = (() => { try { return JSON.parse(rec.notas_credito||'[]'); } catch(e){ return []; } })();
+  const reclamado  = parseFloat(rec.monto_reclamado)  || 0;
+  const acreditado = parseFloat(rec.monto_acreditado) || 0;
+  const saldo      = reclamado - acreditado;
+
+  document.getElementById('modal-det-rec-body').innerHTML = `
+    <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">
+      Reclamo <span style="color:var(--accent)">${rec.nr_numero}</span>
+    </h3>
+    <p style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-bottom:20px">
+      ${rec.proveedor} · ${rec.fecha} · ${REC_TIPO_LABEL[rec.tipo]||rec.tipo}
+      ${rec.factura ? ` · Factura: ${rec.factura}` : ''}
+    </p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px">
+      <div style="background:var(--bg3);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text3)">RECLAMADO</div>
+        <div style="font-size:20px;font-weight:900;color:var(--text)">$${reclamado.toLocaleString('es-AR',{minimumFractionDigits:2})}</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text3)">ACREDITADO</div>
+        <div style="font-size:20px;font-weight:900;color:var(--green)">$${acreditado.toLocaleString('es-AR',{minimumFractionDigits:2})}</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text3)">SALDO</div>
+        <div style="font-size:20px;font-weight:900;color:${saldo>0?'var(--red)':'var(--green)'}">$${saldo.toLocaleString('es-AR',{minimumFractionDigits:2})}</div>
+      </div>
+    </div>
+
+    <div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-bottom:8px">// PRODUCTOS RECLAMADOS</div>
+    <table class="data-table" style="margin-bottom:20px">
+      <thead><tr><th>Código</th><th>Nombre</th><th>Cantidad</th><th>P. Unit.</th><th>Subtotal</th></tr></thead>
+      <tbody>
+        ${items.map(i=>`<tr>
+          <td style="font-family:var(--mono);font-size:11px">${i.codigo||'—'}</td>
+          <td>${i.nombre}</td>
+          <td style="font-family:var(--mono);font-size:11px">${i.cantidad}</td>
+          <td style="font-family:var(--mono);font-size:11px">$${(i.precio_unitario||0).toLocaleString('es-AR',{minimumFractionDigits:2})}</td>
+          <td style="font-family:var(--mono);font-size:11px;font-weight:700">$${(i.subtotal||0).toLocaleString('es-AR',{minimumFractionDigits:2})}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+
+    <div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-bottom:8px">// NOTAS DE CRÉDITO RECIBIDAS (${ncs.length})</div>
+    ${ncs.length ? `
+    <table class="data-table" style="margin-bottom:16px">
+      <thead><tr><th>N° NC</th><th>Fecha</th><th>Monto</th><th>Cargado por</th><th>Obs.</th></tr></thead>
+      <tbody>
+        ${ncs.map(nc=>`<tr>
+          <td style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--green)">${nc.numero}</td>
+          <td style="font-family:var(--mono);font-size:11px">${nc.fecha||'—'}</td>
+          <td style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--green)">$${(nc.monto||0).toLocaleString('es-AR',{minimumFractionDigits:2})}</td>
+          <td style="font-family:var(--mono);font-size:11px">${nc.cargado_por||'—'}</td>
+          <td style="font-size:11px;color:var(--text3)">${nc.obs||'—'}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>` : `<p style="font-family:var(--mono);font-size:11px;color:var(--text3)">Sin notas de crédito aún.</p>`}
+
+    ${rec.obs ? `<div style="background:var(--bg3);border-radius:8px;padding:12px;font-size:12px;color:var(--text2)"><b>Obs:</b> ${rec.obs}</div>` : ''}
+
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+      ${rec.estado !== 'CERRADO' && SESSION.rol !== 'solo_lectura' ? `<button class="btn btn-primary" onclick="document.getElementById('modal-det-rec').style.display='none';abrirModalNCRec('${rec.id}')">📄 Adjuntar NC</button>` : ''}
+      <button class="btn btn-outline" onclick="document.getElementById('modal-det-rec').style.display='none'">Cerrar</button>
+    </div>
+  `;
+  document.getElementById('modal-det-rec').style.display = 'flex';
+}
+
+/* ── EXPORTAR CSV ── */
+function exportarRecCSV() {
+  if (!REC_DATA.length) { alert('No hay datos para exportar'); return; }
+  const rows = [['NR','Fecha','Proveedor','Tipo','Factura','Monto Reclamado','Monto Acreditado','Saldo','Estado','Obs']];
+  REC_DATA.forEach(r => {
+    const rec = parseFloat(r.monto_reclamado)||0;
+    const acr = parseFloat(r.monto_acreditado)||0;
+    rows.push([r.nr_numero, r.fecha||'', r.proveedor, REC_TIPO_LABEL[r.tipo]||r.tipo,
+      r.factura||'', rec.toFixed(2), acr.toFixed(2), (rec-acr).toFixed(2), r.estado, r.obs||'']);
+  });
+  const csv = rows.map(r => r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(csv);
+  a.download = `reclamos_${HOY()}.csv`;
   a.click();
 }
 
