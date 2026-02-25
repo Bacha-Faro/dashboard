@@ -1058,6 +1058,65 @@ async function renderDashboard(el) {
 
     /* CONTADOR ANIMADO */
     .count-up { display:inline-block; }
+
+    /* WIDGETS GRANDES */
+    .db-widget-lg {
+      background: rgba(13,18,37,.85);
+      border: 1px solid rgba(79,127,255,.18);
+      border-radius: 14px; padding: 16px 22px;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 3px; position: relative; overflow: hidden;
+    }
+    .db-widget-lg::before {
+      content:''; position:absolute; inset:0;
+      background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(79,127,255,.06), transparent);
+      pointer-events:none;
+    }
+    #db-clock-lg {
+      font-size: 38px; font-weight: 900;
+      font-family: 'Courier New', monospace;
+      color: var(--accent); letter-spacing: 3px; line-height: 1;
+      animation: clockGlow 2s ease-in-out infinite alternate;
+    }
+    @keyframes clockGlow {
+      from { text-shadow: 0 0 10px rgba(79,127,255,.4), 0 0 20px rgba(79,127,255,.1); }
+      to   { text-shadow: 0 0 28px rgba(79,127,255,.9), 0 0 50px rgba(79,127,255,.4); }
+    }
+    .db-clock-sep { animation: blinkSep .8s step-end infinite; }
+    @keyframes blinkSep { 0%,100%{opacity:1} 50%{opacity:.1} }
+    #db-clock-date-lg {
+      font-family: 'Courier New', monospace;
+      font-size: 10px; letter-spacing: 2px;
+      color: rgba(79,127,255,.55); margin-top: 4px;
+    }
+    .db-clima-icon-lg { font-size: 36px; line-height:1; animation: floatIcon 3s ease-in-out infinite; }
+    @keyframes floatIcon { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
+    #db-clima-temp-lg {
+      font-size: 30px; font-weight: 900;
+      font-family: 'Courier New', monospace;
+      color: var(--text); line-height: 1;
+    }
+    .db-clima-label { font-family:'Courier New',monospace; font-size:9px; letter-spacing:2px; color:var(--text3); margin-top:2px; }
+    .db-news-widget {
+      background: rgba(13,18,37,.85);
+      border: 1px solid rgba(79,127,255,.18);
+      border-radius: 14px; padding: 14px 18px;
+      min-width: 240px; max-width: 300px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .db-news-label { font-family:'Courier New',monospace; font-size:9px; letter-spacing:2px; color:var(--text3); }
+    .db-news-ticker { overflow:hidden; height:38px; position:relative; }
+    .db-news-item {
+      position:absolute; width:100%; font-size:11px; color:var(--text2);
+      line-height:1.4; opacity:0; transition:opacity .6s ease;
+      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+    }
+    .db-news-item.active { opacity:1; }
+    .db-news-source { font-family:'Courier New',monospace; font-size:9px; color:var(--accent); opacity:.7; }
+    .db-news-dots { display:flex; gap:4px; }
+    .db-news-dot { width:5px; height:5px; border-radius:50%; background:rgba(79,127,255,.2); transition:background .3s; }
+    .db-news-dot.active { background:var(--accent); }
   </style>
 
   <div class="db-wrapper">
@@ -1065,27 +1124,36 @@ async function renderDashboard(el) {
     <!-- HEADER -->
     <div class="db-header">
       <div>
-        <div class="db-greeting">Bienvenido, <span id="db-nombre">—</span> 👋</div>
+        <div class="db-greeting">Bienvenido, <span id="db-nombre" style="color:var(--accent)">—</span> 👋</div>
         <div class="db-date-line" id="db-fecha">—</div>
       </div>
-      <div class="db-widgets">
-        <!-- RELOJ -->
-        <div class="db-widget" style="min-width:110px;">
-          <div id="db-clock">--:--:--</div>
-          <div id="db-clock-date">—</div>
+      <div class="db-widgets" style="gap:14px;align-items:stretch">
+
+        <!-- RELOJ GRANDE -->
+        <div class="db-widget-lg" style="min-width:170px;">
+          <div id="db-clock-lg">--<span class="db-clock-sep">:</span>--<span class="db-clock-sep">:</span>--</div>
+          <div id="db-clock-date-lg">—</div>
         </div>
-        <!-- CLIMA -->
-        <div class="db-widget" id="db-clima-widget">
-          <div class="db-widget-icon">🌤️</div>
-          <div class="db-widget-val" id="db-clima-temp">—°</div>
-          <div class="db-widget-label">RÍO CUARTO</div>
+
+        <!-- CLIMA GRANDE -->
+        <div class="db-widget-lg" style="min-width:110px;">
+          <div class="db-clima-icon-lg" id="db-clima-icon-lg">🌤️</div>
+          <div id="db-clima-temp-lg">—°</div>
+          <div class="db-clima-label">RÍO CUARTO</div>
         </div>
-        <!-- EVENTOS -->
-        <div class="db-widget" style="min-width:120px;" id="db-eventos-widget">
-          <div class="db-widget-icon">📅</div>
-          <div class="db-widget-val" id="db-eventos-count">—</div>
-          <div class="db-widget-label">EVENTOS HOY</div>
+
+        <!-- NOTICIAS -->
+        <div class="db-news-widget">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div class="db-news-label">📰 // NOTICIAS AR</div>
+            <div class="db-news-dots" id="db-news-dots"></div>
+          </div>
+          <div class="db-news-ticker" id="db-news-ticker">
+            <div class="db-news-item active" style="color:var(--text3);font-size:10px">Cargando noticias...</div>
+          </div>
+          <div class="db-news-source" id="db-news-source">—</div>
         </div>
+
       </div>
     </div>
 
@@ -1161,14 +1229,14 @@ async function renderDashboard(el) {
     </div>
   </div>`;
 
-  /* ── RELOJ ── */
+  /* ── RELOJ GRANDE ── */
   function tickClock() {
     const now = new Date();
     const h = String(now.getHours()).padStart(2,'0');
     const m = String(now.getMinutes()).padStart(2,'0');
     const s = String(now.getSeconds()).padStart(2,'0');
-    const el = document.getElementById('db-clock');
-    if (el) el.textContent = `${h}:${m}:${s}`;
+    const el = document.getElementById('db-clock-lg');
+    if (el) el.innerHTML = `${h}<span class="db-clock-sep">:</span>${m}<span class="db-clock-sep">:</span>${s}`;
   }
   tickClock();
   const clockInterval = setInterval(tickClock, 1000);
@@ -1178,12 +1246,12 @@ async function renderDashboard(el) {
   const hoy = now.toLocaleDateString('es-AR',{weekday:'long',year:'numeric',month:'long',day:'numeric'}).toUpperCase();
   const dEl = document.getElementById('db-fecha');
   if (dEl) dEl.textContent = '// ' + hoy;
-  const clockDateEl = document.getElementById('db-clock-date');
-  if (clockDateEl) clockDateEl.textContent = now.toLocaleDateString('es-AR',{day:'2-digit',month:'short'}).toUpperCase();
+  const clockDateEl = document.getElementById('db-clock-date-lg');
+  if (clockDateEl) clockDateEl.textContent = now.toLocaleDateString('es-AR',{weekday:'short',day:'2-digit',month:'short'}).toUpperCase();
 
-  /* ── NOMBRE ── */
+  /* ── NOMBRE (nombre + apellido) ── */
   const nEl = document.getElementById('db-nombre');
-  if (nEl) nEl.textContent = SESSION.nombre || 'Usuario';
+  if (nEl) nEl.textContent = `${SESSION.nombre || ''} ${SESSION.apellido || ''}`.trim() || 'Usuario';
 
   /* ── CLIMA (Open-Meteo, sin key) ── */
   (async () => {
@@ -1194,11 +1262,69 @@ async function renderDashboard(el) {
       const wcode = d.current_weather?.weathercode;
       const icons = {0:'☀️',1:'🌤️',2:'⛅',3:'☁️',45:'🌫️',48:'🌫️',51:'🌦️',61:'🌧️',71:'❄️',80:'🌧️',95:'⛈️'};
       const icon = icons[wcode] || '🌡️';
-      const tEl = document.getElementById('db-clima-temp');
-      const wEl = document.querySelector('#db-clima-widget .db-widget-icon');
+      const tEl = document.getElementById('db-clima-temp-lg');
+      const wEl = document.getElementById('db-clima-icon-lg');
       if (tEl) tEl.textContent = `${Math.round(t)}°`;
       if (wEl) wEl.textContent = icon;
     } catch(e) {}
+  })();
+
+  /* ── NOTICIAS (RSS Infobae vía rss2json) ── */
+  (async () => {
+    const noticias = [];
+    try {
+      const feeds = [
+        'https://api.rss2json.com/v1/api.json?rss_url=https://www.infobae.com/feeds/rss/',
+        'https://api.rss2json.com/v1/api.json?rss_url=https://www.lanacion.com.ar/arc/outboundfeeds/rss/',
+      ];
+      for (const url of feeds) {
+        try {
+          const r = await fetch(url);
+          const d = await r.json();
+          if (d.items) {
+            d.items.slice(0,4).forEach(item => noticias.push({
+              titulo: item.title,
+              fuente: d.feed?.title || 'Noticias'
+            }));
+          }
+        } catch(e) {}
+        if (noticias.length >= 6) break;
+      }
+    } catch(e) {}
+
+    // Fallback si no hay noticias
+    if (!noticias.length) {
+      noticias.push({titulo:'No se pudieron cargar noticias', fuente:'—'});
+    }
+
+    const ticker = document.getElementById('db-news-ticker');
+    const dotsEl = document.getElementById('db-news-dots');
+    const sourceEl = document.getElementById('db-news-source');
+    if (!ticker) return;
+
+    // Renderizar items
+    ticker.innerHTML = noticias.map((n,i) =>
+      `<div class="db-news-item${i===0?' active':''}" data-idx="${i}">${n.titulo}</div>`
+    ).join('');
+
+    // Dots
+    if (dotsEl) dotsEl.innerHTML = noticias.map((_,i) =>
+      `<div class="db-news-dot${i===0?' active':''}" data-idx="${i}"></div>`
+    ).join('');
+    if (sourceEl) sourceEl.textContent = noticias[0]?.fuente || '—';
+
+    // Rotación automática
+    let idx = 0;
+    setInterval(() => {
+      const items = ticker.querySelectorAll('.db-news-item');
+      const dots  = dotsEl?.querySelectorAll('.db-news-dot');
+      items[idx]?.classList.remove('active');
+      dots?.[idx]?.classList.remove('active');
+      idx = (idx + 1) % noticias.length;
+      items[idx]?.classList.add('active');
+      dots?.[idx]?.classList.add('active');
+      if (sourceEl) sourceEl.textContent = noticias[idx]?.fuente || '—';
+    }, 5000);
   })();
 
   /* ── CONTADOR ANIMADO ── */
