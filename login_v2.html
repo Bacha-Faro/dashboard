@@ -539,6 +539,37 @@ body::after {
         <div class="user-name-top">ADMINISTRADOR AGUSTÍN FARÓ</div>
         <div class="user-role-top role-admin" id="top-role">ADMIN</div>
       </div>
+      <div style="position:relative">
+        <button id="notif-bell" onclick="toggleNotifPanel()" title="Notificaciones"
+          style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
+                 border-radius:8px;padding:6px 10px;cursor:pointer;font-size:18px;
+                 color:var(--text2);transition:.2s;position:relative">
+          🔔
+          <span id="notif-badge" style="position:absolute;top:-5px;right:-5px;
+            background:var(--red);color:#fff;border-radius:50%;font-size:10px;
+            font-weight:700;min-width:17px;height:17px;display:none;align-items:center;
+            justify-content:center;font-family:var(--mono)">0</span>
+        </button>
+        <div id="notif-panel" style="display:none;position:absolute;right:0;top:44px;
+          width:360px;max-height:480px;overflow-y:auto;
+          background:var(--bg2);border:1px solid rgba(79,127,255,.25);
+          border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.6);z-index:9999">
+          <div style="padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.06);
+            display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:12px;font-weight:700;color:var(--text1);letter-spacing:.05em">
+              ALERTAS DEL SISTEMA
+            </span>
+            <button onclick="marcarTodasLeidas()"
+              style="background:none;border:none;color:var(--accent);font-size:10px;
+                     cursor:pointer;font-family:var(--mono)">✓ LIMPIAR</button>
+          </div>
+          <div id="notif-list" style="padding:8px 0">
+            <div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">
+              Cargando alertas...
+            </div>
+          </div>
+        </div>
+      </div>
       <button class="btn-logout" onclick="logout()">SALIR →</button>
     </div>
   </div>
@@ -857,6 +888,9 @@ function mostrarApp() {
     document.getElementById('nav-admin-section').style.display = 'block';
   }
 
+  // Cargar notificaciones al iniciar y cada 5 minutos
+  cargarNotificaciones();
+  setInterval(cargarNotificaciones, 5 * 60 * 1000);
   const firstNav = document.querySelector('.nav-item');
   navTo('dashboard', firstNav);
 }
@@ -1657,6 +1691,7 @@ async function renderEgresos(el) {
       <div class="kpi-card yellow"><div class="kpi-label">// EN GESTIÓN</div><div class="kpi-value" id="devkpi-gest">…</div><div class="kpi-sub">en proceso</div></div>
       <div class="kpi-card green"> <div class="kpi-label">// CONFIRMADAS</div><div class="kpi-value" id="devkpi-conf">…</div><div class="kpi-sub">nota de crédito recibida</div></div>
       <div class="kpi-card blue">  <div class="kpi-label">// REGISTRADAS HOY</div><div class="kpi-value" id="devkpi-hoy">…</div><div class="kpi-sub">nuevas</div></div>
+      <div class="kpi-card red">   <div class="kpi-label">// VENCIDAS (+45d)</div><div class="kpi-value" id="devkpi-venc">…</div><div class="kpi-sub">superaron el plazo</div></div>
     </div>
 
     <div id="devview-pendientes"></div>
@@ -1765,6 +1800,10 @@ async function renderEgresos(el) {
     document.getElementById('dev-notif-mail-wrap').style.display = e.target.checked ? 'block' : 'none';
 
   agregarItemDev(); // al menos 1 ítem
+
+  // Cargar proveedores frecuentes e inicializar autocomplete
+  if (!PROV_CACHE.length) await cargarProveedoresFrecuentes();
+  initProvAutocomplete('dev-proveedor');
 
   try {
     DEV_DATA = await sbGet('devoluciones_proveedores', 'order=creado_en.desc&limit=500');
@@ -1910,15 +1949,22 @@ function switchDEVTab(tab) {
 }
 
 function renderDEVKpis() {
-  const hoy = HOY();
-  const pend = DEV_DATA.filter(d => d.estado === 'PENDIENTE').length;
-  const gest = DEV_DATA.filter(d => d.estado === 'EN_GESTION').length;
-  const conf = DEV_DATA.filter(d => d.estado === 'CONFIRMADA').length;
-  const nuevas = DEV_DATA.filter(d => d.creado_en?.substring(0,10) === hoy).length;
+  const hoy  = HOY();
+  const activos = DEV_DATA.filter(d => ['PENDIENTE','EN_GESTION'].includes(d.estado));
+  const pend    = DEV_DATA.filter(d => d.estado === 'PENDIENTE').length;
+  const gest    = DEV_DATA.filter(d => d.estado === 'EN_GESTION').length;
+  const conf    = DEV_DATA.filter(d => d.estado === 'CONFIRMADA').length;
+  const nuevas  = DEV_DATA.filter(d => d.creado_en?.substring(0,10) === hoy).length;
+  const venc    = activos.filter(d => { const p = plazoInfo(d.creado_en); return p && p.vencido; }).length;
   document.getElementById('devkpi-pend').textContent = pend;
   document.getElementById('devkpi-gest').textContent = gest;
   document.getElementById('devkpi-conf').textContent = conf;
   document.getElementById('devkpi-hoy').textContent  = nuevas;
+  const elVenc = document.getElementById('devkpi-venc');
+  if (elVenc) {
+    elVenc.textContent  = venc;
+    elVenc.style.color  = venc > 0 ? 'var(--red)' : '';
+  }
   if (pend > 0) document.getElementById('devkpi-pend').style.color = 'var(--red)';
   if (gest > 0) document.getElementById('devkpi-gest').style.color = 'var(--yellow)';
 }
@@ -1994,7 +2040,7 @@ function renderDEVTabla(datos) {
         <table class="data-table">
           <thead><tr>
             <th>Fecha</th><th>Proveedor</th><th>Remito</th><th>Motivo</th>
-            <th>Productos</th><th>Estado</th><th>Nota C.</th><th>Acciones</th>
+            <th>Productos</th><th>Estado</th><th>Plazo</th><th>Nota C.</th><th>Acciones</th>
           </tr></thead>
           <tbody>
             ${datos.map(d => {
@@ -2002,6 +2048,8 @@ function renderDEVTabla(datos) {
               const itemsStr = items.map(i=>`${i.nombre}${i.cantidad?' (x'+i.cantidad+')':''}`).join(', ');
               const estadoStyle = DEV_ESTADO_TAG[d.estado] || '';
               const motivoLabel = DEV_MOTIVO_LABEL[d.motivo] || d.motivo;
+              const esActivo    = ['PENDIENTE','EN_GESTION'].includes(d.estado);
+              const plazoCell   = esActivo ? plazoBadge(d.creado_en) : '—';
               const acciones = SESSION.rol !== 'solo_lectura' ? `
                 ${d.estado === 'PENDIENTE' ? `<button class="btn btn-outline btn-sm" onclick="cambiarEstadoDEV('${d.id}','EN_GESTION')">▶ Gestionar</button>` : ''}
                 ${d.estado === 'EN_GESTION' && !d.nota_credito ? `<button class="btn btn-outline btn-sm" onclick="abrirModalNC('${d.id}')">📄 NC</button>` : ''}
@@ -2014,6 +2062,7 @@ function renderDEVTabla(datos) {
                 <td><span style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:10px;background:rgba(79,127,255,.1);color:var(--accent)">${motivoLabel}</span></td>
                 <td style="font-size:11px;color:var(--text2);max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${itemsStr}">${itemsStr||'—'}</td>
                 <td><span style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:10px;${estadoStyle}">${d.estado}</span></td>
+                <td style="text-align:center">${plazoCell}</td>
                 <td style="font-family:var(--mono);font-size:11px">${d.nota_credito || '—'}</td>
                 <td style="white-space:nowrap">${acciones}</td>
               </tr>`;
@@ -2123,6 +2172,11 @@ async function renderReclamos(el) {
         <div class="kpi-label">// MONTO PENDIENTE</div>
         <div class="kpi-value" id="reckpi-monto" style="font-size:26px">…</div>
         <div class="kpi-sub">por acreditar en $</div>
+      </div>
+      <div class="kpi-card red">
+        <div class="kpi-label">// VENCIDOS (+45d)</div>
+        <div class="kpi-value" id="reckpi-venc">…</div>
+        <div class="kpi-sub">superaron el plazo</div>
       </div>
     </div>
 
@@ -2279,6 +2333,10 @@ async function renderReclamos(el) {
   document.getElementById('rec-notif-wa').onchange   = e => document.getElementById('rec-wa-wrap').style.display   = e.target.checked ? 'block' : 'none';
   document.getElementById('rec-notif-mail').onchange = e => document.getElementById('rec-mail-wrap').style.display = e.target.checked ? 'block' : 'none';
   agregarItemRec();
+
+  // Cargar proveedores frecuentes e inicializar autocomplete
+  if (!PROV_CACHE.length) await cargarProveedoresFrecuentes();
+  initProvAutocomplete('rec-proveedor');
 
   try {
     REC_DATA = await sbGet('reclamos_proveedores', 'order=creado_en.desc&limit=500');
@@ -2447,20 +2505,25 @@ const REC_ESTADO_STYLE = {
 };
 
 function renderRECKpis() {
-  const mes = HOY().substring(0,7);
+  const mes  = HOY().substring(0,7);
+  const activos = REC_DATA.filter(r => r.estado !== 'CERRADO');
   const pend = REC_DATA.filter(r => r.estado === 'PENDIENTE').length;
   const parc = REC_DATA.filter(r => r.estado === 'PARCIAL').length;
   const cerr = REC_DATA.filter(r => r.estado === 'CERRADO' && r.creado_en?.substring(0,7) === mes).length;
-  const montoPend = REC_DATA
-    .filter(r => r.estado !== 'CERRADO')
-    .reduce((s,r) => s + (parseFloat(r.monto_reclamado)||0) - (parseFloat(r.monto_acreditado)||0), 0);
+  const venc = activos.filter(r => { const p = plazoInfo(r.creado_en); return p && p.vencido; }).length;
+  const montoPend = activos.reduce((s,r) => s + (parseFloat(r.monto_reclamado)||0) - (parseFloat(r.monto_acreditado)||0), 0);
 
   document.getElementById('reckpi-pend').textContent  = pend;
   document.getElementById('reckpi-parc').textContent  = parc;
   document.getElementById('reckpi-cerr').textContent  = cerr;
   document.getElementById('reckpi-monto').textContent = '$ ' + montoPend.toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:0});
-  if (pend > 0) document.getElementById('reckpi-pend').style.color  = 'var(--red)';
-  if (parc > 0) document.getElementById('reckpi-parc').style.color  = 'var(--yellow)';
+  const elVenc = document.getElementById('reckpi-venc');
+  if (elVenc) {
+    elVenc.textContent = venc;
+    elVenc.style.color = venc > 0 ? 'var(--red)' : '';
+  }
+  if (pend > 0)      document.getElementById('reckpi-pend').style.color  = 'var(--red)';
+  if (parc > 0)      document.getElementById('reckpi-parc').style.color  = 'var(--yellow)';
   if (montoPend > 0) document.getElementById('reckpi-monto').style.color = 'var(--red)';
 }
 
@@ -2523,7 +2586,7 @@ function renderRECTabla(datos) {
         <table class="data-table">
           <thead><tr>
             <th>NR</th><th>Fecha</th><th>Proveedor</th><th>Tipo</th><th>Factura</th>
-            <th>Reclamado</th><th>Acreditado</th><th>Saldo</th><th>Estado</th><th>Acciones</th>
+            <th>Reclamado</th><th>Acreditado</th><th>Saldo</th><th>Estado</th><th>Plazo</th><th>Acciones</th>
           </tr></thead>
           <tbody>
             ${datos.map(r => {
@@ -2532,6 +2595,8 @@ function renderRECTabla(datos) {
               const saldo       = reclamado - acreditado;
               const estadoStyle = REC_ESTADO_STYLE[r.estado] || '';
               const ncs         = (() => { try { return JSON.parse(r.notas_credito||'[]'); } catch(e){ return []; } })();
+              const esActivo    = r.estado !== 'CERRADO';
+              const plazoCell   = esActivo ? plazoBadge(r.creado_en) : '—';
               const acciones = SESSION.rol !== 'solo_lectura' ? `
                 <button class="btn btn-outline btn-sm" onclick="verDetalleRec('${r.id}')" title="Ver detalle">👁</button>
                 ${r.estado !== 'CERRADO' ? `<button class="btn btn-outline btn-sm" onclick="abrirModalNCRec('${r.id}')" title="Adjuntar NC">📄 NC</button>` : ''}
@@ -2546,6 +2611,7 @@ function renderRECTabla(datos) {
                 <td style="font-family:var(--mono);font-size:11px;color:var(--green)">$${acreditado.toLocaleString('es-AR',{minimumFractionDigits:2})}</td>
                 <td style="font-family:var(--mono);font-size:11px;font-weight:700;color:${saldo>0?'var(--red)':'var(--green)'}">$${saldo.toLocaleString('es-AR',{minimumFractionDigits:2})}</td>
                 <td><span style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:10px;${estadoStyle}">${r.estado}</span></td>
+                <td style="text-align:center">${plazoCell}</td>
                 <td style="white-space:nowrap">${acciones}</td>
               </tr>`;
             }).join('')}
@@ -2714,6 +2780,290 @@ function exportarRecCSV() {
   a.click();
 }
 
+// ══════════════════════════════════════════════
+//  PROVEEDORES FRECUENTES — AUTOCOMPLETE
+// ══════════════════════════════════════════════
+let PROV_CACHE = []; // [{nombre, count}] ordenado por frecuencia
+
+async function cargarProveedoresFrecuentes() {
+  try {
+    const [ingresos, devs, recs] = await Promise.all([
+      sbGet('proveedores_ingresos',     'select=proveedor_nombre').catch(()=>[]),
+      sbGet('devoluciones_proveedores', 'select=proveedor').catch(()=>[]),
+      sbGet('reclamos_proveedores',     'select=proveedor').catch(()=>[]),
+    ]);
+    const freq = {};
+    ingresos.forEach(r => { const n = r.proveedor_nombre?.trim(); if(n) freq[n] = (freq[n]||0) + 1; });
+    devs.forEach(r =>    { const n = r.proveedor?.trim();       if(n) freq[n] = (freq[n]||0) + 1; });
+    recs.forEach(r =>    { const n = r.proveedor?.trim();       if(n) freq[n] = (freq[n]||0) + 1; });
+    PROV_CACHE = Object.entries(freq)
+      .sort((a,b) => b[1] - a[1])
+      .map(([nombre, count]) => ({ nombre, count }));
+  } catch(e) {}
+}
+
+function initProvAutocomplete(inputId) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+
+  // Crear dropdown
+  const dropdown = document.createElement('div');
+  dropdown.id = inputId + '-ac';
+  dropdown.style.cssText = `
+    position:absolute; z-index:9000; min-width:100%;
+    background:var(--bg2); border:1px solid rgba(79,127,255,.3);
+    border-radius:8px; box-shadow:0 8px 32px rgba(0,0,0,.5);
+    max-height:220px; overflow-y:auto; display:none;
+  `;
+
+  // Posicionar relativo al input
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:relative; width:100%';
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+  wrap.appendChild(dropdown);
+
+  let idx = -1;
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    const matches = q.length === 0
+      ? PROV_CACHE.slice(0, 8)
+      : PROV_CACHE.filter(p => p.nombre.toLowerCase().includes(q)).slice(0, 8);
+
+    if (!matches.length) { dropdown.style.display = 'none'; return; }
+
+    idx = -1;
+    dropdown.innerHTML = matches.map((p, i) => `
+      <div class="prov-ac-item" data-nombre="${p.nombre}" data-idx="${i}"
+        style="padding:10px 14px;cursor:pointer;font-size:13px;color:var(--text2);
+               display:flex;align-items:center;justify-content:space-between;
+               border-bottom:1px solid rgba(255,255,255,.04)">
+        <span>${resaltarMatch(p.nombre, q)}</span>
+        <span style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-left:10px">${p.count}x</span>
+      </div>
+    `).join('');
+
+    dropdown.querySelectorAll('.prov-ac-item').forEach(item => {
+      item.addEventListener('mousedown', e => {
+        e.preventDefault();
+        input.value = item.dataset.nombre;
+        dropdown.style.display = 'none';
+        input.dispatchEvent(new Event('change'));
+      });
+      item.addEventListener('mouseenter', () => {
+        dropdown.querySelectorAll('.prov-ac-item').forEach(i => i.style.background = '');
+        item.style.background = 'rgba(79,127,255,.1)';
+      });
+      item.addEventListener('mouseleave', () => item.style.background = '');
+    });
+
+    dropdown.style.display = 'block';
+  });
+
+  input.addEventListener('focus', () => {
+    if (PROV_CACHE.length && input.value.trim().length === 0) {
+      input.dispatchEvent(new Event('input'));
+    }
+  });
+
+  input.addEventListener('keydown', e => {
+    const items = dropdown.querySelectorAll('.prov-ac-item');
+    if (!items.length) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      items[idx]?.style.setProperty('background','');
+      idx = Math.min(idx + 1, items.length - 1);
+      items[idx].style.background = 'rgba(79,127,255,.1)';
+      items[idx].scrollIntoView({block:'nearest'});
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      items[idx]?.style.setProperty('background','');
+      idx = Math.max(idx - 1, 0);
+      items[idx].style.background = 'rgba(79,127,255,.1)';
+      items[idx].scrollIntoView({block:'nearest'});
+    } else if (e.key === 'Enter' && idx >= 0) {
+      e.preventDefault();
+      input.value = items[idx].dataset.nombre;
+      dropdown.style.display = 'none';
+    } else if (e.key === 'Escape') {
+      dropdown.style.display = 'none';
+    }
+  });
+
+  document.addEventListener('click', e => {
+    if (!wrap.contains(e.target)) dropdown.style.display = 'none';
+  });
+}
+
+function resaltarMatch(texto, query) {
+  if (!query) return texto;
+  const idx = texto.toLowerCase().indexOf(query.toLowerCase());
+  if (idx < 0) return texto;
+  return texto.slice(0, idx) +
+    `<span style="color:var(--accent);font-weight:700">${texto.slice(idx, idx + query.length)}</span>` +
+    texto.slice(idx + query.length);
+}
+
+// ══════════════════════════════════════════════
+//  CENTRO DE NOTIFICACIONES
+// ══════════════════════════════════════════════
+let NOTIF_DATA = [];
+let NOTIF_OPEN = false;
+
+async function cargarNotificaciones() {
+  const alertas = [];
+  const hoy = new Date();
+
+  try {
+    // 1. BACHAS — retorno vencido o próximo (≤3 días)
+    const bachas = await sbGet('bachas', 'select=id,destino,fecha_retorno,estado&neq.estado=DEVUELTA').catch(() => []);
+    bachas.forEach(b => {
+      if (!b.fecha_retorno) return;
+      const retorno = new Date(b.fecha_retorno);
+      const dias = Math.ceil((retorno - hoy) / 86400000);
+      if (dias < 0) {
+        alertas.push({ tipo: 'danger', icono: '🧺', titulo: 'Bacha vencida', msg: `${b.destino} — retorno hace ${Math.abs(dias)} día${Math.abs(dias)>1?'s':''}`, id: 'bacha_' + b.id });
+      } else if (dias <= 3) {
+        alertas.push({ tipo: 'warning', icono: '🧺', titulo: 'Bacha por vencer', msg: `${b.destino} — retorno en ${dias} día${dias>1?'s':''}`, id: 'bacha_' + b.id });
+      }
+    });
+  } catch(e) {}
+
+  try {
+    // 2. TEMPERATURA — últimas lecturas fuera de rango
+    const temps = await sbGet('temperatura_lecturas', 'select=sensor,temperatura,creado_en&order=creado_en.desc&limit=30').catch(() => []);
+    const ultimoPorSensor = {};
+    temps.forEach(t => { if (!ultimoPorSensor[t.sensor]) ultimoPorSensor[t.sensor] = t; });
+    Object.values(ultimoPorSensor).forEach(t => {
+      const temp = parseFloat(t.temperatura);
+      if (temp > 25) alertas.push({ tipo: 'danger', icono: '🌡️', titulo: 'Temperatura alta', msg: `${t.sensor}: ${temp}°C (máx. 25°C)`, id: 'temp_' + t.sensor });
+      else if (temp < 2) alertas.push({ tipo: 'danger', icono: '🌡️', titulo: 'Temperatura baja', msg: `${t.sensor}: ${temp}°C (mín. 2°C)`, id: 'temp_' + t.sensor });
+    });
+  } catch(e) {}
+
+  try {
+    // 3. RECLAMOS — pendientes/parciales con plazo de 45 días
+    const recs = await sbGet('reclamos_proveedores', "select=id,nr_numero,proveedor,estado,creado_en&in.estado=(PENDIENTE,ACREDITADO PARCIAL)").catch(() => []);
+    recs.forEach(r => {
+      const p = plazoInfo(r.creado_en);
+      if (!p) return;
+      if (p.vencido)
+        alertas.push({ tipo: 'danger',  icono: '📋', titulo: 'Reclamo vencido',      msg: `${r.proveedor} — NR ${r.nr_numero} (+${p.transcurridos}d, superó los 45 días)`, id: 'rec_' + r.id });
+      else if (p.porVencer)
+        alertas.push({ tipo: 'warning', icono: '📋', titulo: 'Reclamo por vencer',   msg: `${r.proveedor} — NR ${r.nr_numero} (vence en ${p.restantes} día${p.restantes!==1?'s':''})`, id: 'rec_' + r.id });
+    });
+  } catch(e) {}
+
+  try {
+    // 4. DEVOLUCIONES — pendientes con plazo de 45 días
+    const devs = await sbGet('devoluciones_proveedores', "select=id,proveedor,remito,estado,creado_en&eq.estado=PENDIENTE").catch(() => []);
+    devs.forEach(d => {
+      const p = plazoInfo(d.creado_en);
+      if (!p) return;
+      if (p.vencido)
+        alertas.push({ tipo: 'danger',  icono: '↩️', titulo: 'Devolución vencida',   msg: `${d.proveedor} — remito ${d.remito} (+${p.transcurridos}d, superó los 45 días)`, id: 'dev_' + d.id });
+      else if (p.porVencer)
+        alertas.push({ tipo: 'warning', icono: '↩️', titulo: 'Devolución por vencer', msg: `${d.proveedor} — remito ${d.remito} (vence en ${p.restantes} día${p.restantes!==1?'s':''})`, id: 'dev_' + d.id });
+    });
+  } catch(e) {}
+
+  try {
+    // 5. DIFERENCIAS DE STOCK — pendientes
+    const diffs = await sbGet('diferencias_stock', "select=id,producto,estado,creado_en&eq.estado=PENDIENTE").catch(() => []);
+    if (diffs.length > 0) {
+      alertas.push({ tipo: 'info', icono: '⚠️', titulo: 'Diferencias de stock', msg: `${diffs.length} diferencia${diffs.length>1?'s':''} pendiente${diffs.length>1?'s':''} de resolver`, id: 'diffs_stock' });
+    }
+  } catch(e) {}
+
+  // Filtrar alertas ya leídas (guardadas en localStorage)
+  const leidas = JSON.parse(localStorage.getItem('notif_leidas') || '[]');
+  NOTIF_DATA = alertas.filter(a => !leidas.includes(a.id));
+
+  actualizarBadge();
+  renderNotifList();
+}
+
+function actualizarBadge() {
+  const badge = document.getElementById('notif-badge');
+  const count = NOTIF_DATA.length;
+  if (count > 0) {
+    badge.textContent = count > 99 ? '99+' : count;
+    badge.style.display = 'flex';
+    // Animación pulso si hay alertas críticas
+    const hayCriticas = NOTIF_DATA.some(n => n.tipo === 'danger');
+    document.getElementById('notif-bell').style.borderColor = hayCriticas
+      ? 'rgba(255,80,80,.5)' : 'rgba(255,180,0,.4)';
+  } else {
+    badge.style.display = 'none';
+    document.getElementById('notif-bell').style.borderColor = 'rgba(255,255,255,.12)';
+  }
+}
+
+function renderNotifList() {
+  const list = document.getElementById('notif-list');
+  if (!NOTIF_DATA.length) {
+    list.innerHTML = `<div style="padding:24px;text-align:center;color:var(--text3);font-size:12px">
+      <div style="font-size:28px;margin-bottom:8px">✅</div>
+      Sin alertas pendientes
+    </div>`;
+    return;
+  }
+
+  const colores = { danger: '#ff4d4d', warning: '#ffb400', info: '#4f7fff' };
+  const bgColores = { danger: 'rgba(255,77,77,.08)', warning: 'rgba(255,180,0,.08)', info: 'rgba(79,127,255,.08)' };
+
+  list.innerHTML = NOTIF_DATA.map(n => `
+    <div style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.04);
+      background:${bgColores[n.tipo]};display:flex;gap:12px;align-items:flex-start">
+      <span style="font-size:18px;flex-shrink:0">${n.icono}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:11px;font-weight:700;color:${colores[n.tipo]};
+          letter-spacing:.04em;margin-bottom:2px">${n.titulo}</div>
+        <div style="font-size:12px;color:var(--text2);white-space:nowrap;
+          overflow:hidden;text-overflow:ellipsis">${n.msg}</div>
+      </div>
+      <button onclick="leerNotif('${n.id}')" title="Descartar"
+        style="background:none;border:none;color:var(--text3);font-size:14px;
+               cursor:pointer;flex-shrink:0;padding:0 2px">×</button>
+    </div>
+  `).join('');
+}
+
+function toggleNotifPanel() {
+  const panel = document.getElementById('notif-panel');
+  NOTIF_OPEN = !NOTIF_OPEN;
+  panel.style.display = NOTIF_OPEN ? 'block' : 'none';
+  if (NOTIF_OPEN) cargarNotificaciones();
+}
+
+function leerNotif(id) {
+  const leidas = JSON.parse(localStorage.getItem('notif_leidas') || '[]');
+  if (!leidas.includes(id)) leidas.push(id);
+  localStorage.setItem('notif_leidas', JSON.stringify(leidas));
+  NOTIF_DATA = NOTIF_DATA.filter(n => n.id !== id);
+  actualizarBadge();
+  renderNotifList();
+}
+
+function marcarTodasLeidas() {
+  const leidas = NOTIF_DATA.map(n => n.id);
+  localStorage.setItem('notif_leidas', JSON.stringify(leidas));
+  NOTIF_DATA = [];
+  actualizarBadge();
+  renderNotifList();
+}
+
+// Cerrar panel al hacer clic afuera
+document.addEventListener('click', e => {
+  const panel = document.getElementById('notif-panel');
+  const bell = document.getElementById('notif-bell');
+  if (NOTIF_OPEN && panel && bell && !panel.contains(e.target) && !bell.contains(e.target)) {
+    NOTIF_OPEN = false;
+    panel.style.display = 'none';
+  }
+});
+
 function renderPlaceholder(el, page) {
   if (page === '_denied') {
     el.innerHTML = `<div class="placeholder-page"><div class="big-icon">🔒</div><h2>Acceso restringido</h2><p>// NO TENÉS PERMISOS PARA ESTA SECCIÓN</p></div>`;
@@ -2844,6 +3194,26 @@ function switchBTab(tab) {
 
 // ── Estado de cada bacha ──
 const HOY = () => new Date().toISOString().split('T')[0];
+
+// ── Plazo 45 días para reclamos/devoluciones pendientes ──────────────────────
+const PLAZO_DIAS = 45;
+function plazoInfo(creado_en) {
+  if (!creado_en) return null;
+  const inicio = new Date(creado_en);
+  const hoy    = new Date();
+  const transcurridos = Math.floor((hoy - inicio) / 86400000);
+  const restantes     = PLAZO_DIAS - transcurridos;
+  const vencido       = restantes < 0;
+  const porVencer     = !vencido && restantes <= 5;   // 5 días de margen de alerta
+  return { transcurridos, restantes, vencido, porVencer };
+}
+function plazoBadge(creado_en) {
+  const p = plazoInfo(creado_en);
+  if (!p) return '—';
+  if (p.vencido)    return `<span title="Vencido hace ${Math.abs(p.restantes)} día${Math.abs(p.restantes)!==1?'s':''}" style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:10px;background:rgba(239,68,68,.2);color:var(--red);font-weight:700">🔴 +${p.transcurridos}d</span>`;
+  if (p.porVencer)  return `<span title="Vence en ${p.restantes} día${p.restantes!==1?'s':''}" style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:10px;background:rgba(234,179,8,.2);color:#eab308;font-weight:700">⚠️ ${p.restantes}d</span>`;
+  return `<span title="${p.transcurridos} días desde el inicio · vence en ${p.restantes} días" style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:10px;background:rgba(34,197,94,.1);color:var(--green)">${p.restantes}d</span>`;
+}
 
 function estadoBacha(bachaId) {
   const salidas = MOVIMIENTOS_DATA.filter(m => m.bacha_id === bachaId && m.tipo === 'SALIDA' && !m.fecha_retorno);
