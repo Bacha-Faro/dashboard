@@ -1094,6 +1094,87 @@ async function renderDashboard(el) {
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
     .db-pulse { animation: pulse 2s infinite; }
 
+    /* ── SECCIÓN VENCIMIENTOS ── */
+    .db-venc-section {
+      background: rgba(13,18,37,.8);
+      border: 1px solid rgba(79,127,255,.12);
+      border-radius: 12px;
+      padding: 20px 22px;
+      position: relative; overflow: hidden;
+    }
+    .db-venc-section::after {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      border-radius: 12px 12px 0 0;
+      background: linear-gradient(90deg, #f97316, #ef4444, transparent);
+    }
+    .db-venc-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .db-venc-title {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 2px;
+      color: var(--text3); display: flex; align-items: center; gap: 8px;
+    }
+    .db-venc-count-badge {
+      background: rgba(239,68,68,.15); color: var(--red);
+      border: 1px solid rgba(239,68,68,.25);
+      border-radius: 20px; padding: 2px 10px;
+      font-size: 10px; font-family: var(--mono); letter-spacing: .5px;
+    }
+    .db-venc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 10px;
+    }
+    .db-venc-item {
+      display: flex; align-items: flex-start; gap: 12px;
+      padding: 12px 14px;
+      background: rgba(0,0,0,.25);
+      border-radius: 9px;
+      border-left: 3px solid transparent;
+      transition: transform .15s, background .15s;
+      cursor: default;
+    }
+    .db-venc-item:hover { background: rgba(0,0,0,.35); transform: translateX(2px); }
+    .db-venc-item.vencido { border-left-color: var(--red); }
+    .db-venc-item.por-vencer { border-left-color: var(--yellow); }
+    .db-venc-item.info { border-left-color: var(--accent); }
+    .db-venc-icon { font-size: 20px; flex-shrink: 0; margin-top: 1px; line-height: 1; }
+    .db-venc-body { flex: 1; min-width: 0; }
+    .db-venc-categoria {
+      font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px;
+      margin-bottom: 3px; font-weight: 700; text-transform: uppercase;
+    }
+    .db-venc-item.vencido .db-venc-categoria { color: var(--red); }
+    .db-venc-item.por-vencer .db-venc-categoria { color: var(--yellow); }
+    .db-venc-item.info .db-venc-categoria { color: var(--accent); }
+    .db-venc-desc {
+      font-size: 12px; color: var(--text); white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px;
+    }
+    .db-venc-meta {
+      font-family: var(--mono); font-size: 10px; color: var(--text3);
+    }
+    .db-venc-dias {
+      font-family: var(--mono); font-size: 11px; font-weight: 800;
+      flex-shrink: 0; padding: 4px 10px; border-radius: 6px;
+      align-self: center; text-align: center; min-width: 52px;
+    }
+    .db-venc-item.vencido .db-venc-dias {
+      background: rgba(239,68,68,.15); color: var(--red);
+    }
+    .db-venc-item.por-vencer .db-venc-dias {
+      background: rgba(251,191,36,.12); color: var(--yellow);
+    }
+    .db-venc-item.info .db-venc-dias {
+      background: rgba(79,127,255,.1); color: var(--accent);
+    }
+    .db-venc-empty {
+      grid-column: 1/-1; text-align: center;
+      padding: 28px 0; color: var(--text3);
+      font-family: var(--mono); font-size: 11px;
+    }
+
     /* CONTADOR ANIMADO */
     .count-up { display:inline-block; }
 
@@ -1265,6 +1346,23 @@ async function renderDashboard(el) {
       </div>
 
     </div>
+
+    <!-- SECCIÓN VENCIMIENTOS -->
+    <div class="db-venc-section">
+      <div class="db-venc-header">
+        <div class="db-venc-title">
+          📅 &nbsp;// PRÓXIMOS VENCIMIENTOS Y ALERTAS
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span id="db-venc-badge" class="db-venc-count-badge" style="display:none">0 alertas</span>
+          <span style="font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:1px">ACTUALIZADO AHORA</span>
+        </div>
+      </div>
+      <div class="db-venc-grid" id="db-venc-grid">
+        <div class="db-venc-empty">⏳ Cargando vencimientos...</div>
+      </div>
+    </div>
+
   </div>`;
 
   /* ── RELOJ GRANDE ── */
@@ -1483,7 +1581,133 @@ async function renderDashboard(el) {
   } catch(e) {
     console.error('Dashboard error:', e);
   }
-}
+
+  /* ── SECCIÓN VENCIMIENTOS ── */
+  (async () => {
+    const grid = document.getElementById('db-venc-grid');
+    const badge = document.getElementById('db-venc-badge');
+    if (!grid) return;
+
+    const hoy = new Date();
+    const items = [];
+
+    // Helper: diferencia en días
+    const difDias = (fecha) => Math.ceil((new Date(fecha) - hoy) / 86400000);
+
+    try {
+      // 1. BACHAS — retorno esperado próximo o vencido
+      const bachas = await sbGet('bachas', 'select=id,destino,fecha_retorno,estado&neq.estado=DEVUELTA').catch(() => []);
+      bachas.forEach(b => {
+        if (!b.fecha_retorno) return;
+        const dias = difDias(b.fecha_retorno);
+        if (dias <= 7) {
+          items.push({
+            tipo: dias < 0 ? 'vencido' : 'por-vencer',
+            icono: '🧺',
+            categoria: dias < 0 ? 'Bacha vencida' : 'Bacha por retornar',
+            desc: b.destino,
+            meta: `Retorno: ${new Date(b.fecha_retorno).toLocaleDateString('es-AR')}`,
+            dias,
+            orden: dias < 0 ? dias - 1000 : dias,
+          });
+        }
+      });
+    } catch(e) {}
+
+    try {
+      // 2. RECLAMOS — próximos a vencer (plazo 45 días)
+      const recs = await sbGet('reclamos_proveedores', "select=id,nr_numero,proveedor,estado,creado_en&in.estado=(PENDIENTE,ACREDITADO PARCIAL)").catch(() => []);
+      recs.forEach(r => {
+        const p = plazoInfo(r.creado_en);
+        if (!p) return;
+        if (p.vencido || p.porVencer) {
+          items.push({
+            tipo: p.vencido ? 'vencido' : 'por-vencer',
+            icono: '📋',
+            categoria: p.vencido ? 'Reclamo vencido' : 'Reclamo por vencer',
+            desc: `${r.proveedor} — NR ${r.nr_numero}`,
+            meta: p.vencido ? `Superó los 45 días (+${p.transcurridos}d)` : `Vence en ${p.restantes} día${p.restantes !== 1 ? 's' : ''}`,
+            dias: p.vencido ? -p.transcurridos : p.restantes,
+            orden: p.vencido ? -p.transcurridos - 2000 : p.restantes,
+          });
+        }
+      });
+    } catch(e) {}
+
+    try {
+      // 3. DEVOLUCIONES — próximas a vencer
+      const devs = await sbGet('devoluciones_proveedores', "select=id,proveedor,remito,estado,creado_en&eq.estado=PENDIENTE").catch(() => []);
+      devs.forEach(d => {
+        const p = plazoInfo(d.creado_en);
+        if (!p) return;
+        if (p.vencido || p.porVencer) {
+          items.push({
+            tipo: p.vencido ? 'vencido' : 'por-vencer',
+            icono: '↩️',
+            categoria: p.vencido ? 'Devolución vencida' : 'Devolución por vencer',
+            desc: `${d.proveedor} — Remito ${d.remito}`,
+            meta: p.vencido ? `Superó los 45 días (+${p.transcurridos}d)` : `Vence en ${p.restantes} día${p.restantes !== 1 ? 's' : ''}`,
+            dias: p.vencido ? -p.transcurridos : p.restantes,
+            orden: p.vencido ? -p.transcurridos - 2000 : p.restantes,
+          });
+        }
+      });
+    } catch(e) {}
+
+    try {
+      // 4. DIFERENCIAS DE STOCK — pendientes (info)
+      const diffs2 = await sbGet('diferencias_stock', 'select=id,producto_nombre,tipo,creado_en&eq.estado=PENDIENTE&order=creado_en.asc&limit=5').catch(() => []);
+      diffs2.forEach(d => {
+        const diasAbierta = Math.abs(difDias(d.creado_en));
+        items.push({
+          tipo: 'info',
+          icono: '⚠️',
+          categoria: 'Diferencia de stock pendiente',
+          desc: d.producto_nombre || 'Producto sin nombre',
+          meta: `Tipo: ${d.tipo || '—'} · Abierta hace ${diasAbierta} día${diasAbierta !== 1 ? 's' : ''}`,
+          dias: diasAbierta,
+          orden: 500 + diasAbierta,
+        });
+      });
+    } catch(e) {}
+
+    // Ordenar: vencidos primero (más negativo = más urgente), luego por vencer, luego info
+    items.sort((a, b) => a.orden - b.orden);
+
+    if (badge) {
+      const urgentes = items.filter(i => i.tipo !== 'info').length;
+      if (urgentes > 0) {
+        badge.textContent = `${urgentes} alerta${urgentes !== 1 ? 's' : ''}`;
+        badge.style.display = 'inline-flex';
+      }
+    }
+
+    if (!items.length) {
+      grid.innerHTML = `<div class="db-venc-empty">
+        <div style="font-size:26px;margin-bottom:8px">✅</div>
+        Sin vencimientos ni alertas pendientes
+      </div>`;
+      return;
+    }
+
+    grid.innerHTML = items.map(item => {
+      const diasLabel = item.tipo === 'vencido'
+        ? `${Math.abs(item.dias)}d<br>VENCIDO`
+        : item.tipo === 'por-vencer'
+          ? `${item.dias}d<br>QUEDAN`
+          : `${item.dias}d<br>ABIERTA`;
+      return `
+        <div class="db-venc-item ${item.tipo}">
+          <div class="db-venc-icon">${item.icono}</div>
+          <div class="db-venc-body">
+            <div class="db-venc-categoria">${item.categoria}</div>
+            <div class="db-venc-desc" title="${item.desc}">${item.desc}</div>
+            <div class="db-venc-meta">${item.meta}</div>
+          </div>
+          <div class="db-venc-dias">${diasLabel}</div>
+        </div>`;
+    }).join('');
+  })();
 
 // ══════════════════════════════════════════════
 //  USUARIOS
