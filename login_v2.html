@@ -585,7 +585,7 @@ body::after {
     </div>
     <div class="app-user">
       <div class="user-info">
-        <div class="user-name-top">ADMINISTRADOR AGUSTÍN FARÓ</div>
+        <div class="user-name-top" id="top-username">ADMINISTRADOR AGUSTÍN FARÓ</div>
         <div class="user-role-top role-admin" id="top-role">ADMIN</div>
       </div>
       <div style="position:relative">
@@ -636,6 +636,9 @@ body::after {
       </div>
       <div class="nav-item" onclick="navTo('proveedores',this)">
         <span class="nav-icon">📦</span> Proveedores
+      </div>
+      <div class="nav-item" onclick="navTo('farmacias',this)">
+        <span class="nav-icon">🏪</span> Control Farmacias
       </div>
       <div class="nav-item" onclick="navTo('egresos',this)">
         <span class="nav-icon">↩</span> Devoluciones
@@ -965,6 +968,7 @@ function navTo(page, el) {
     temperatura:    () => renderTemperatura(mc),
     comisionistas:  () => renderComisionistas(mc),
     proveedores:    () => renderProveedores(mc),
+    farmacias:      () => renderFarmacias(mc),
     diferencias:    () => renderDiferencias(mc),
     egresos:        () => renderEgresos(mc),
     reclamos:       () => renderReclamos(mc),
@@ -6687,6 +6691,454 @@ function mostrarSplash(callback) {
   };
   setTimeout(finish, 1600);
 }
+
+
+// ══════════════════════════════════════════════
+//  FARMACIAS — CONTROL URGENTE
+// ══════════════════════════════════════════════
+let FARMACIAS_DATA = [];
+let FARM_AVISOS_DATA = [];
+let FARMACIA_ACTUAL_ID = localStorage.getItem('farmacia_actual_id') || null;
+let FARMACIA_ACTUAL_NOMBRE = localStorage.getItem('farmacia_actual_nombre') || null;
+let FARMACIA_FILTRO_ID = localStorage.getItem('farmacia_actual_id') || 'TODAS';
+let FARMACIA_ESTADO_FILTRO = 'TODOS';
+let FARMACIA_BUSQUEDA = '';
+
+function _sbRow(x) {
+  return Array.isArray(x) ? x[0] : x;
+}
+
+function escapeHtml(str = '') {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+async function loadFarmaciasData() {
+  const [farmacias, avisos] = await Promise.all([
+    sbGet('farmacias', 'activa=eq.true&order=nombre.asc&select=id,codigo,nombre,direccion'),
+    sbGet('farmacia_avisos', 'order=creado_en.desc&limit=1000&select=id,farmacia_id,fecha,tipo_aviso,articulo,codigo_articulo,cantidad,prioridad,estado,observacion,creado_por,creado_en,resuelto_por,resuelto_en,resolucion_comentario').catch(()=>[])
+  ]);
+  FARMACIAS_DATA = farmacias || [];
+  FARM_AVISOS_DATA = avisos || [];
+
+  if (FARMACIA_ACTUAL_ID && !FARMACIAS_DATA.some(f => f.id === FARMACIA_ACTUAL_ID)) {
+    FARMACIA_ACTUAL_ID = null;
+    FARMACIA_ACTUAL_NOMBRE = null;
+    localStorage.removeItem('farmacia_actual_id');
+    localStorage.removeItem('farmacia_actual_nombre');
+  }
+}
+
+function getFarmaciaById(id) {
+  return FARMACIAS_DATA.find(f => f.id === id) || null;
+}
+
+function getFarmaciaNombreById(id) {
+  const f = getFarmaciaById(id);
+  return f ? f.nombre : '—';
+}
+
+function farmaciaEstadoTag(estado) {
+  const map = {
+    NUEVO: 'tag-blue',
+    EN_REVISION: 'tag-yellow',
+    EN_GESTION: 'tag-blue',
+    RESUELTO: 'tag-green',
+    CERRADO: 'tag-green'
+  };
+  return `<span class="tag ${map[estado] || 'tag-blue'}">${escapeHtml(estado || '')}</span>`;
+}
+
+function farmaciaPrioridadTag(prio) {
+  const map = {
+    BAJA: 'tag-blue',
+    MEDIA: 'tag-yellow',
+    ALTA: 'tag-red',
+    CRITICA: 'tag-red'
+  };
+  return `<span class="tag ${map[prio] || 'tag-blue'}">${escapeHtml(prio || '')}</span>`;
+}
+
+function farmaciaTipoTag(tipo) {
+  const map = {
+    FALTANTE: 'tag-red',
+    QUIEBRE: 'tag-red',
+    REPOSICION: 'tag-blue',
+    OBSERVACION: 'tag-yellow'
+  };
+  return `<span class="tag ${map[tipo] || 'tag-blue'}">${escapeHtml(tipo || '')}</span>`;
+}
+
+function actualizarFarmaciaActualUI() {
+  const topEl = document.getElementById('farmacia-actual-top');
+  if (topEl) topEl.textContent = FARMACIA_ACTUAL_NOMBRE ? `Sucursal: ${FARMACIA_ACTUAL_NOMBRE}` : 'Sucursal: no seleccionada';
+}
+
+function abrirSelectorFarmacia() {
+  const opciones = FARMACIAS_DATA.map(f => `<option value="${f.id}" ${FARMACIA_ACTUAL_ID === f.id ? 'selected' : ''}>${escapeHtml(f.nombre)}${f.direccion ? ' — ' + escapeHtml(f.direccion) : ''}</option>`).join('');
+  const html = `
+    <div class="modal-overlay open" id="modal-farmacia-actual">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title">Seleccionar sucursal actual</div>
+          <div class="modal-close" onclick="cerrarModal('modal-farmacia-actual')">✕</div>
+        </div>
+        <div class="modal-body">
+          <div class="form-row single">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Sucursal donde estás operando</label>
+              <select class="form-select" id="farmacia-actual-select">
+                <option value="">Elegir sucursal...</option>
+                ${opciones}
+              </select>
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--text3);font-family:var(--mono)">
+            La selección se usará por defecto al cargar faltantes, quiebres y reposiciones.
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="cerrarModal('modal-farmacia-actual')">Cancelar</button>
+          <button class="btn btn-primary" onclick="confirmarFarmaciaActual()">Confirmar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+function confirmarFarmaciaActual() {
+  const sel = document.getElementById('farmacia-actual-select');
+  if (!sel || !sel.value) { toast('⚠ Elegí una sucursal', 'warn'); return; }
+  const f = getFarmaciaById(sel.value);
+  if (!f) { toast('⚠ Sucursal inválida', 'warn'); return; }
+  FARMACIA_ACTUAL_ID = f.id;
+  FARMACIA_ACTUAL_NOMBRE = f.nombre;
+  FARMACIA_FILTRO_ID = f.id;
+  localStorage.setItem('farmacia_actual_id', f.id);
+  localStorage.setItem('farmacia_actual_nombre', f.nombre);
+  actualizarFarmaciaActualUI();
+  cerrarModal('modal-farmacia-actual');
+  toast(`✓ Sucursal actual: ${f.nombre}`, 'ok');
+  const mc = document.getElementById('main-content');
+  if (mc && mc.querySelector('[data-page="farmacias"]')) renderFarmacias(mc);
+}
+
+function ensureFarmaciaActual() {
+  if (!FARMACIA_ACTUAL_ID) { abrirSelectorFarmacia(); return false; }
+  return true;
+}
+
+function abrirModalNuevoAvisoFarmacia() {
+  if (!ensureFarmaciaActual()) return;
+  const fecha = new Date().toISOString().slice(0, 10);
+  const html = `
+    <div class="modal-overlay open" id="modal-nuevo-aviso-farmacia">
+      <div class="modal" style="max-width:760px">
+        <div class="modal-header">
+          <div class="modal-title">+ Nuevo aviso de farmacia</div>
+          <div class="modal-close" onclick="cerrarModal('modal-nuevo-aviso-farmacia')">✕</div>
+        </div>
+        <div class="modal-body">
+          <div style="margin-bottom:14px;padding:10px 12px;border:1px solid var(--border);border-radius:4px;background:var(--bg3);font-size:12px;color:var(--text2)">
+            <b>Sucursal actual:</b> ${escapeHtml(FARMACIA_ACTUAL_NOMBRE || 'No seleccionada')}
+          </div>
+          <div class="form-row">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Fecha</label>
+              <input type="date" class="form-input" id="fa-fecha" value="${fecha}">
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">Tipo de aviso</label>
+              <select class="form-select" id="fa-tipo">
+                <option value="FALTANTE">Faltante</option>
+                <option value="QUIEBRE">Quiebre</option>
+                <option value="REPOSICION">Reposición</option>
+                <option value="OBSERVACION">Observación</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row single">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Artículo</label>
+              <input type="text" class="form-input" id="fa-articulo" placeholder="Ej: Paracetamol 500 mg">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Código artículo</label>
+              <input type="text" class="form-input" id="fa-codigo" placeholder="Código interno / barras / troquel">
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">Cantidad</label>
+              <input type="number" class="form-input" id="fa-cantidad" step="0.01" placeholder="0">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Prioridad</label>
+              <select class="form-select" id="fa-prioridad">
+                <option value="BAJA">Baja</option>
+                <option value="MEDIA" selected>Media</option>
+                <option value="ALTA">Alta</option>
+                <option value="CRITICA">Crítica</option>
+              </select>
+            </div>
+            <div class="form-group-inner"></div>
+          </div>
+          <div class="form-row single">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Observación</label>
+              <textarea class="form-input" id="fa-observacion" rows="4" placeholder="Detalle del faltante, quiebre o pedido"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="cerrarModal('modal-nuevo-aviso-farmacia')">Cancelar</button>
+          <button class="btn btn-primary" onclick="guardarNuevoAvisoFarmacia()">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function guardarNuevoAvisoFarmacia() {
+  try {
+    if (!FARMACIA_ACTUAL_ID) { toast('⚠ Primero elegí una sucursal', 'warn'); return; }
+    const fecha = document.getElementById('fa-fecha').value;
+    const tipo_aviso = document.getElementById('fa-tipo').value;
+    const articulo = document.getElementById('fa-articulo').value.trim();
+    const codigo_articulo = document.getElementById('fa-codigo').value.trim();
+    const cantidad = document.getElementById('fa-cantidad').value;
+    const prioridad = document.getElementById('fa-prioridad').value;
+    const observacion = document.getElementById('fa-observacion').value.trim();
+
+    if (!fecha || !articulo) { toast('⚠ Fecha y artículo son obligatorios', 'warn'); return; }
+
+    const insertedRaw = await sbPost('farmacia_avisos', {
+      farmacia_id: FARMACIA_ACTUAL_ID,
+      fecha,
+      tipo_aviso,
+      articulo,
+      codigo_articulo: codigo_articulo || null,
+      cantidad: cantidad ? Number(cantidad) : null,
+      prioridad,
+      estado: 'NUEVO',
+      observacion: observacion || null,
+      creado_por: SESSION?.id || null
+    });
+    const inserted = _sbRow(insertedRaw);
+
+    await sbPost('farmacia_avisos_historial', {
+      aviso_id: inserted.id,
+      accion: 'CREACION',
+      estado_nuevo: 'NUEVO',
+      comentario: 'Aviso creado',
+      usuario_id: SESSION?.id || null
+    }).catch(()=>{});
+
+    await sbPost('auditoria', {
+      usuario_id: SESSION?.id || null,
+      username: SESSION?.username || null,
+      accion: 'NUEVO_AVISO',
+      modulo: 'FARMACIAS',
+      detalle: { aviso_id: inserted.id, farmacia_id: FARMACIA_ACTUAL_ID, tipo_aviso, articulo }
+    }).catch(()=>{});
+
+    cerrarModal('modal-nuevo-aviso-farmacia');
+    await loadFarmaciasData();
+    await renderFarmacias(document.getElementById('main-content'));
+    toast('✓ Aviso cargado correctamente', 'ok');
+  } catch(e) {
+    console.error(e);
+    toast(`⚠ Error: ${e.message}`, 'error');
+  }
+}
+
+async function cambiarEstadoAvisoFarmacia(avisoId) {
+  try {
+    const sel = document.getElementById(`farm-estado-${avisoId}`);
+    if (!sel) return;
+    const nuevoEstado = sel.value;
+    const actual = FARM_AVISOS_DATA.find(x => x.id === avisoId);
+    if (!actual || actual.estado === nuevoEstado) return;
+    const comentario = (prompt('Comentario opcional para el cambio de estado:', '') || '').trim();
+
+    const payload = { estado: nuevoEstado };
+    if (nuevoEstado === 'RESUELTO' || nuevoEstado === 'CERRADO') {
+      payload.resuelto_por = SESSION?.id || null;
+      payload.resuelto_en = new Date().toISOString();
+      if (comentario) payload.resolucion_comentario = comentario;
+    }
+
+    await sbPatch('farmacia_avisos', `id=eq.${avisoId}`, payload);
+    await sbPost('farmacia_avisos_historial', {
+      aviso_id: avisoId,
+      accion: 'CAMBIO_ESTADO',
+      estado_anterior: actual.estado,
+      estado_nuevo: nuevoEstado,
+      comentario: comentario || null,
+      usuario_id: SESSION?.id || null
+    }).catch(()=>{});
+    await sbPost('auditoria', {
+      usuario_id: SESSION?.id || null,
+      username: SESSION?.username || null,
+      accion: 'CAMBIO_ESTADO',
+      modulo: 'FARMACIAS',
+      detalle: { aviso_id: avisoId, estado_anterior: actual.estado, estado_nuevo: nuevoEstado }
+    }).catch(()=>{});
+
+    await loadFarmaciasData();
+    await renderFarmacias(document.getElementById('main-content'));
+    toast('✓ Estado actualizado', 'ok');
+  } catch(e) {
+    console.error(e);
+    toast(`⚠ Error: ${e.message}`, 'error');
+  }
+}
+
+function getFarmaciasFiltered() {
+  let data = [...FARM_AVISOS_DATA];
+  const farmId = FARMACIA_FILTRO_ID || 'TODAS';
+  const estado = FARMACIA_ESTADO_FILTRO || 'TODOS';
+  const q = (FARMACIA_BUSQUEDA || '').trim().toLowerCase();
+
+  if (farmId && farmId !== 'TODAS') data = data.filter(x => x.farmacia_id === farmId);
+  if (estado && estado !== 'TODOS') data = data.filter(x => x.estado === estado);
+  if (q) data = data.filter(x => (`${x.articulo || ''} ${x.codigo_articulo || ''} ${x.observacion || ''}`).toLowerCase().includes(q));
+  return data;
+}
+
+async function renderFarmacias(el) {
+  if (!el) return;
+  await loadFarmaciasData();
+  actualizarFarmaciaActualUI();
+  const data = getFarmaciasFiltered();
+
+  const abiertos = FARM_AVISOS_DATA.filter(x => ['NUEVO','EN_REVISION','EN_GESTION'].includes(x.estado)).length;
+  const criticos = FARM_AVISOS_DATA.filter(x => x.prioridad === 'CRITICA' && x.estado !== 'CERRADO').length;
+  const resueltos = FARM_AVISOS_DATA.filter(x => ['RESUELTO','CERRADO'].includes(x.estado)).length;
+  const hoy = FARM_AVISOS_DATA.filter(x => x.fecha === new Date().toISOString().slice(0,10)).length;
+
+  const optsFarm = [`<option value="TODAS" ${FARMACIA_FILTRO_ID === 'TODAS' ? 'selected' : ''}>Todas las sucursales</option>`]
+    .concat(FARMACIAS_DATA.map(f => `<option value="${f.id}" ${FARMACIA_FILTRO_ID === f.id ? 'selected' : ''}>${escapeHtml(f.nombre)}</option>`)).join('');
+
+  const rows = data.map(x => {
+    const canEdit = SESSION?.rol !== 'solo_lectura';
+    const acciones = canEdit ? `
+      <select class="form-select" id="farm-estado-${x.id}" style="min-width:130px;padding:6px 8px;font-size:12px">
+        ${['NUEVO','EN_REVISION','EN_GESTION','RESUELTO','CERRADO'].map(e => `<option value="${e}" ${x.estado===e?'selected':''}>${e.replaceAll('_',' ')}</option>`).join('')}
+      </select>
+      <button class="btn btn-outline" style="padding:6px 10px" onclick="cambiarEstadoAvisoFarmacia('${x.id}')">Guardar</button>
+    ` : `<div style="font-size:11px;color:var(--text3);font-family:var(--mono)">Solo lectura</div>`;
+
+    return `
+      <tr>
+        <td>${fmtDate(x.fecha)}</td>
+        <td>${escapeHtml(getFarmaciaNombreById(x.farmacia_id))}</td>
+        <td>${farmaciaTipoTag(x.tipo_aviso)}</td>
+        <td>
+          <div style="font-weight:600;color:var(--text)">${escapeHtml(x.articulo || '')}</div>
+          <div style="font-size:10px;color:var(--text3);font-family:var(--mono)">${escapeHtml(x.codigo_articulo || '')}</div>
+        </td>
+        <td>${x.cantidad ?? '—'}</td>
+        <td>${farmaciaPrioridadTag(x.prioridad)}</td>
+        <td>${farmaciaEstadoTag(x.estado)}</td>
+        <td style="max-width:240px;white-space:normal">${escapeHtml(x.observacion || '—')}</td>
+        <td><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${acciones}</div></td>
+      </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div data-page="farmacias">
+      <div class="panel" style="margin-bottom:18px;background:linear-gradient(120deg,rgba(79,127,255,.08),rgba(139,92,246,.05))">
+        <div class="panel-body" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:24px;font-weight:800;margin-bottom:4px">Control Farmacias</div>
+            <div style="font-family:var(--mono);font-size:11px;color:var(--text3)">Carga urgente de faltantes, quiebres, reposición y observaciones operativas.</div>
+            <div id="farmacia-actual-top" style="margin-top:10px;font-size:12px;color:var(--text2)">Sucursal: ${escapeHtml(FARMACIA_ACTUAL_NOMBRE || 'no seleccionada')}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-outline" onclick="abrirSelectorFarmacia()">Cambiar sucursal</button>
+            ${SESSION?.rol !== 'solo_lectura' ? `<button class="btn btn-primary" onclick="abrirModalNuevoAvisoFarmacia()">+ Nuevo aviso</button>` : ''}
+          </div>
+        </div>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi-card blue"><div class="kpi-label">AVISOS HOY</div><div class="kpi-value">${hoy}</div><div class="kpi-sub">cargados hoy</div></div>
+        <div class="kpi-card red"><div class="kpi-label">ABIERTOS</div><div class="kpi-value">${abiertos}</div><div class="kpi-sub">nuevo / revisión / gestión</div></div>
+        <div class="kpi-card yellow"><div class="kpi-label">CRÍTICOS</div><div class="kpi-value">${criticos}</div><div class="kpi-sub">prioridad crítica</div></div>
+        <div class="kpi-card green"><div class="kpi-label">RESUELTOS</div><div class="kpi-value">${resueltos}</div><div class="kpi-sub">resueltos o cerrados</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Filtro de avisos</div>
+        </div>
+        <div class="panel-body">
+          <div class="form-row" style="grid-template-columns:1.2fr .8fr 1fr">
+            <div class="form-group-inner">
+              <label class="form-label-inner">Sucursal</label>
+              <select class="form-select" id="farmacias-filtro-sucursal" onchange="FARMACIA_FILTRO_ID=this.value;renderFarmacias(document.getElementById('main-content'))">${optsFarm}</select>
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">Estado</label>
+              <select class="form-select" id="farmacias-filtro-estado" onchange="FARMACIA_ESTADO_FILTRO=this.value;renderFarmacias(document.getElementById('main-content'))">
+                <option value="TODOS">Todos</option>
+                <option value="NUEVO">Nuevo</option>
+                <option value="EN_REVISION">En revisión</option>
+                <option value="EN_GESTION">En gestión</option>
+                <option value="RESUELTO">Resuelto</option>
+                <option value="CERRADO">Cerrado</option>
+              </select>
+            </div>
+            <div class="form-group-inner">
+              <label class="form-label-inner">Buscar</label>
+              <input class="form-input" id="farmacias-filtro-q" placeholder="Artículo / código / observación" oninput="FARMACIA_BUSQUEDA=this.value;renderFarmacias(document.getElementById('main-content'))">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Avisos registrados</div>
+        </div>
+        <div class="panel-body" style="overflow:auto">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Sucursal</th>
+                <th>Tipo</th>
+                <th>Artículo</th>
+                <th>Cantidad</th>
+                <th>Prioridad</th>
+                <th>Estado</th>
+                <th>Observación</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows || '<tr><td colspan="9" style="text-align:center;color:var(--text3)">Sin avisos cargados</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+
+  const farmSel = document.getElementById('farmacias-filtro-sucursal');
+  if (farmSel) farmSel.value = FARMACIA_FILTRO_ID || 'TODAS';
+  const estadoSel = document.getElementById('farmacias-filtro-estado');
+  if (estadoSel) estadoSel.value = FARMACIA_ESTADO_FILTRO || 'TODOS';
+  const qInp = document.getElementById('farmacias-filtro-q');
+  if (qInp) qInp.value = FARMACIA_BUSQUEDA || '';
+}
+
 </script>
 </body>
 </html>
