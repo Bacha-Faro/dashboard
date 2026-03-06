@@ -638,7 +638,7 @@ body::after {
         <span class="nav-icon">📦</span> Proveedores
       </div>
       <div class="nav-item" onclick="navTo('farmacias',this)">
-        <span class="nav-icon">🏪</span> Stock Farmacias
+        <span class="nav-icon">🏪</span> Control Farmacias
       </div>
       <div class="nav-item" onclick="navTo('egresos',this)">
         <span class="nav-icon">↩</span> Devoluciones
@@ -3383,6 +3383,14 @@ function fmtDT(iso) {
 
 function cerrarModal(id) {
   document.getElementById(id).classList.remove('open');
+}
+
+// Cierra y elimina el modal del DOM (evita IDs duplicados y bugs de validación)
+function cerrarModalRemove(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  try { el.classList.remove('open'); } catch(e){}
+  try { el.remove(); } catch(e) { if (el.parentNode) el.parentNode.removeChild(el); }
 }
 
 document.querySelectorAll('.modal-overlay').forEach(o => {
@@ -6719,7 +6727,7 @@ function escapeHtml(str = '') {
 
 async function loadFarmaciasData() {
   const [farmacias, avisos] = await Promise.all([
-    sbGet('destinos', 'activo=eq.true&tipo_destino=eq.FARMACIA&order=codigo.asc&select=id,codigo,nombre,zona'),
+    sbGet('destinos', 'activo=eq.true&tipo_destino=eq.FARMACIA&order=nombre.asc&select=id,codigo,nombre,zona'),
     sbGet('farmacia_avisos', 'order=creado_en.desc&limit=1000&select=id,destino_id,fecha,tipo_aviso,articulo,codigo_articulo,cantidad,prioridad,estado,observacion,creado_por,creado_en,resuelto_por,resuelto_en,resolucion_comentario').catch(()=>[])
   ]);
   FARMACIAS_DATA = farmacias || [];
@@ -6779,13 +6787,14 @@ function actualizarFarmaciaActualUI() {
 }
 
 function abrirSelectorFarmacia() {
+  cerrarModalRemove('modal-farmacia-actual');
   const opciones = FARMACIAS_DATA.map(f => `<option value="${f.id}" ${FARMACIA_ACTUAL_ID === f.id ? 'selected' : ''}>${escapeHtml(f.nombre)}${f.zona ? ' — ' + escapeHtml(f.zona) : ''}</option>`).join('');
   const html = `
     <div class="modal-overlay open" id="modal-farmacia-actual">
       <div class="modal">
         <div class="modal-header">
           <div class="modal-title">Seleccionar sucursal actual</div>
-          <div class="modal-close" onclick="cerrarModal('modal-farmacia-actual')">✕</div>
+          <div class="modal-close" onclick="cerrarModalRemove('modal-farmacia-actual')">✕</div>
         </div>
         <div class="modal-body">
           <div class="form-row single">
@@ -6802,7 +6811,7 @@ function abrirSelectorFarmacia() {
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-outline" onclick="cerrarModal('modal-farmacia-actual')">Cancelar</button>
+          <button class="btn btn-outline" onclick="cerrarModalRemove('modal-farmacia-actual')">Cancelar</button>
           <button class="btn btn-primary" onclick="confirmarFarmaciaActual()">Confirmar</button>
         </div>
       </div>
@@ -6821,7 +6830,7 @@ function confirmarFarmaciaActual() {
   localStorage.setItem('farmacia_actual_id', f.id);
   localStorage.setItem('farmacia_actual_nombre', f.nombre);
   actualizarFarmaciaActualUI();
-  cerrarModal('modal-farmacia-actual');
+  cerrarModalRemove('modal-farmacia-actual');
   toast(`✓ Sucursal actual: ${f.nombre}`, 'ok');
   const mc = document.getElementById('main-content');
   if (mc && mc.querySelector('[data-page="farmacias"]')) renderFarmacias(mc);
@@ -6833,6 +6842,7 @@ function ensureFarmaciaActual() {
 }
 
 function abrirModalNuevoAvisoFarmacia() {
+  cerrarModalRemove('modal-nuevo-aviso-farmacia');
   if (!ensureFarmaciaActual()) return;
   const fecha = new Date().toISOString().slice(0, 10);
   const html = `
@@ -6840,7 +6850,7 @@ function abrirModalNuevoAvisoFarmacia() {
       <div class="modal" style="max-width:760px">
         <div class="modal-header">
           <div class="modal-title">+ Nuevo aviso de farmacia</div>
-          <div class="modal-close" onclick="cerrarModal('modal-nuevo-aviso-farmacia')">✕</div>
+          <div class="modal-close" onclick="cerrarModalRemove('modal-nuevo-aviso-farmacia')">✕</div>
         </div>
         <div class="modal-body">
           <div style="margin-bottom:14px;padding:10px 12px;border:1px solid var(--border);border-radius:4px;background:var(--bg3);font-size:12px;color:var(--text2)">
@@ -6897,7 +6907,7 @@ function abrirModalNuevoAvisoFarmacia() {
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-outline" onclick="cerrarModal('modal-nuevo-aviso-farmacia')">Cancelar</button>
+          <button class="btn btn-outline" onclick="cerrarModalRemove('modal-nuevo-aviso-farmacia')">Cancelar</button>
           <button class="btn btn-primary" onclick="guardarNuevoAvisoFarmacia()">Guardar</button>
         </div>
       </div>
@@ -6948,7 +6958,7 @@ async function guardarNuevoAvisoFarmacia() {
       detalle: { aviso_id: inserted.id, destino_id: FARMACIA_ACTUAL_ID, tipo_aviso, articulo }
     }).catch(()=>{});
 
-    cerrarModal('modal-nuevo-aviso-farmacia');
+    cerrarModalRemove('modal-nuevo-aviso-farmacia');
     await loadFarmaciasData();
     await renderFarmacias(document.getElementById('main-content'));
     toast('✓ Aviso cargado correctamente', 'ok');
@@ -7057,7 +7067,7 @@ async function renderFarmacias(el) {
       <div class="panel" style="margin-bottom:18px;background:linear-gradient(120deg,rgba(79,127,255,.08),rgba(139,92,246,.05))">
         <div class="panel-body" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
           <div>
-            <div style="font-size:24px;font-weight:800;margin-bottom:4px">Stock Farmacias</div>
+            <div style="font-size:24px;font-weight:800;margin-bottom:4px">Control Farmacias</div>
             <div style="font-family:var(--mono);font-size:11px;color:var(--text3)">Carga urgente de faltantes, quiebres, reposición y observaciones operativas.</div>
             <div id="farmacia-actual-top" style="margin-top:10px;font-size:12px;color:var(--text2)">Sucursal: ${escapeHtml(FARMACIA_ACTUAL_NOMBRE || 'no seleccionada')}</div>
           </div>
