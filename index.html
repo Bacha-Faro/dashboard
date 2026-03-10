@@ -6817,8 +6817,10 @@ function farmaciaProveedorTag(prov) {
   if (!prov) return '—';
   const labels = {
     GRASSI:       'Droguería Grassi',
-    EXTENERAS:    'Droguería Exteneras',
-    OTRA_SUCURSAL:'Otra Sucursal',
+    COFARSUR:     'Droguería Cofarsur',
+    KELLERHOFF:   'Droguería Kellerhoff',
+    DECOR_MEDICA: 'Decor Médica',
+    SUCURSAL:     'Sucursal',
   };
   return `<span class="tag tag-blue" style="font-size:10px">${escapeHtml(labels[prov] || prov)}</span>`;
 }
@@ -6919,12 +6921,14 @@ function abrirModalNuevoAvisoFarmacia() {
 
           <div class="form-row" id="fa-proveedor-row">
             <div class="form-group-inner">
-              <label class="form-label-inner">Proveedor de búsqueda</label>
+              <label class="form-label-inner">Proveedor</label>
               <select class="form-select" id="fa-proveedor">
                 <option value="">Sin asignar</option>
                 <option value="GRASSI">Droguería Grassi</option>
-                <option value="EXTENERAS">Droguería Exteneras</option>
-                <option value="OTRA_SUCURSAL">Otra Sucursal</option>
+                <option value="COFARSUR">Droguería Cofarsur</option>
+                <option value="KELLERHOFF">Droguería Kellerhoff</option>
+                <option value="DECOR_MEDICA">Decor Médica</option>
+                <option value="SUCURSAL">Sucursal</option>
               </select>
             </div>
             <div class="form-group-inner">
@@ -7147,7 +7151,7 @@ async function renderFarmacias(el) {
     const p = x.proveedor_busqueda || 'SIN_ASIGNAR';
     provCount[p] = (provCount[p] || 0) + 1;
   });
-  const provLabels = { GRASSI:'Grassi', EXTENERAS:'Exteneras', OTRA_SUCURSAL:'Otra Suc.', SIN_ASIGNAR:'Sin asignar' };
+  const provLabels = { GRASSI:'D. Grassi', COFARSUR:'D. Cofarsur', KELLERHOFF:'D. Kellerhoff', DECOR_MEDICA:'Decor Médica', SUCURSAL:'Sucursal', SIN_ASIGNAR:'Sin asignar' };
   const provBars = Object.entries(provCount)
     .sort((a,b) => b[1]-a[1])
     .map(([p, n]) => {
