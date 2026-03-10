@@ -6777,26 +6777,24 @@ function getFarmaciaNombreById(id) {
 
 function farmaciaEstadoTag(estado) {
   const map = {
-    PENDIENTE:   'tag-yellow',
-    EN_REVISION: 'tag-blue',
-    RESUELTO:    'tag-green',
+    PENDIENTE:    'tag-yellow',
+    RESUELTO:     'tag-green',
+    NO_RESUELTO:  'tag-red',
   };
   const labels = {
-    PENDIENTE:   'Pendiente',
-    EN_REVISION: 'En revisión',
-    RESUELTO:    'Resuelto',
+    PENDIENTE:    'Pendiente',
+    RESUELTO:     'Resuelto',
+    NO_RESUELTO:  'No resuelto',
   };
-  return `<span class="tag ${map[estado] || 'tag-blue'}">${escapeHtml(labels[estado] || estado || '')}</span>`;
+  return `<span class="tag ${map[estado] || 'tag-yellow'}">${escapeHtml(labels[estado] || estado || '')}</span>`;
 }
 
 function farmaciaPrioridadTag(prio) {
   const map = {
-    BAJA: 'tag-blue',
     MEDIA: 'tag-yellow',
-    ALTA: 'tag-red',
-    CRITICA: 'tag-red'
+    ALTA:  'tag-red',
   };
-  return `<span class="tag ${map[prio] || 'tag-blue'}">${escapeHtml(prio || '')}</span>`;
+  return `<span class="tag ${map[prio] || 'tag-yellow'}">${escapeHtml(prio || '')}</span>`;
 }
 
 function farmaciaTipoTag(tipo) {
@@ -6932,10 +6930,8 @@ function abrirModalNuevoAvisoFarmacia() {
             <div class="form-group-inner">
               <label class="form-label-inner">Prioridad</label>
               <select class="form-select" id="fa-prioridad">
-                <option value="BAJA">Baja</option>
                 <option value="MEDIA" selected>Media</option>
                 <option value="ALTA">Alta</option>
-                <option value="CRITICA">Crítica</option>
               </select>
             </div>
           </div>
@@ -6944,10 +6940,8 @@ function abrirModalNuevoAvisoFarmacia() {
             <div class="form-group-inner">
               <label class="form-label-inner">Prioridad</label>
               <select class="form-select" id="fa-prioridad2">
-                <option value="BAJA">Baja</option>
                 <option value="MEDIA" selected>Media</option>
                 <option value="ALTA">Alta</option>
-                <option value="CRITICA">Crítica</option>
               </select>
             </div>
             <div class="form-group-inner"></div>
@@ -7069,7 +7063,7 @@ async function cambiarEstadoAvisoFarmacia(avisoId) {
     const comentario = (prompt('Comentario opcional para el cambio de estado:', '') || '').trim();
 
     const payload = { estado: nuevoEstado };
-    if (nuevoEstado === 'RESUELTO') {
+    if (nuevoEstado === 'RESUELTO' || nuevoEstado === 'NO_RESUELTO') {
       payload.resuelto_por = SESSION?.id || null;
       payload.resuelto_en = new Date().toISOString();
       if (comentario) payload.resolucion_comentario = comentario;
@@ -7130,10 +7124,10 @@ async function renderFarmacias(el) {
 
   // ── KPIs base ─────────────────────────────
   const pendientes   = all.filter(x => x.estado === 'PENDIENTE').length;
-  const enRevision   = all.filter(x => x.estado === 'EN_REVISION').length;
+  const noResueltos  = all.filter(x => x.estado === 'NO_RESUELTO').length;
   const resueltos    = all.filter(x => x.estado === 'RESUELTO').length;
   const hoy          = all.filter(x => x.fecha === new Date().toISOString().slice(0,10)).length;
-  const criticos     = all.filter(x => x.prioridad === 'CRITICA' && x.estado !== 'RESUELTO').length;
+  const criticos     = all.filter(x => x.prioridad === 'ALTA' && x.estado === 'PENDIENTE').length;
   const totalFalta   = all.filter(x => x.tipo_aviso === 'FALTA_QUIEBRE').length;
   const total        = all.length;
   const tasaRes      = total > 0 ? Math.round((resueltos / total) * 100) : 0;
@@ -7199,8 +7193,11 @@ async function renderFarmacias(el) {
   // ── Filas de tabla ─────────────────────────
   const rows = data.map(x => {
     const accionesEstado = canState
-      ? `<select class="form-select" id="farm-estado-${x.id}" style="min-width:120px;padding:6px 8px;font-size:12px">
-          ${['PENDIENTE','EN_REVISION','RESUELTO'].map(e => `<option value="${e}" ${x.estado===e?'selected':''}>${e==='EN_REVISION'?'En revisión':e==='PENDIENTE'?'Pendiente':'Resuelto'}</option>`).join('')}
+      ? `<select class="form-select" id="farm-estado-${x.id}" style="min-width:130px;padding:6px 8px;font-size:12px">
+          ${['PENDIENTE','RESUELTO','NO_RESUELTO'].map(e => {
+            const lbl = e === 'NO_RESUELTO' ? 'No resuelto' : e === 'PENDIENTE' ? 'Pendiente' : 'Resuelto';
+            return `<option value="${e}" ${x.estado===e?'selected':''}>${lbl}</option>`;
+          }).join('')}
         </select>
         <button class="btn btn-outline" style="padding:6px 10px;font-size:11px" onclick="cambiarEstadoAvisoFarmacia('${x.id}')">Guardar</button>`
       : `<div style="font-size:11px;color:var(--text3);font-family:var(--mono)">Sin permiso</div>`;
@@ -7248,9 +7245,9 @@ async function renderFarmacias(el) {
       <!-- KPIs principales -->
       <div class="kpi-grid" style="margin-bottom:18px">
         <div class="kpi-card yellow"><div class="kpi-label">PENDIENTES</div><div class="kpi-value">${pendientes}</div><div class="kpi-sub">sin gestionar</div></div>
-        <div class="kpi-card blue"><div class="kpi-label">EN REVISIÓN</div><div class="kpi-value">${enRevision}</div><div class="kpi-sub">en seguimiento</div></div>
+        <div class="kpi-card red"><div class="kpi-label">NO RESUELTOS</div><div class="kpi-value">${noResueltos}</div><div class="kpi-sub">requieren atención</div></div>
         <div class="kpi-card green"><div class="kpi-label">RESUELTOS</div><div class="kpi-value">${resueltos}</div><div class="kpi-sub">tasa ${tasaRes}%</div></div>
-        <div class="kpi-card red"><div class="kpi-label">CRÍTICOS</div><div class="kpi-value">${criticos}</div><div class="kpi-sub">prioridad crítica abiertos</div></div>
+        <div class="kpi-card red"><div class="kpi-label">ALTA PRIORIDAD</div><div class="kpi-value">${criticos}</div><div class="kpi-sub">pendientes urgentes</div></div>
         <div class="kpi-card blue"><div class="kpi-label">HOY</div><div class="kpi-value">${hoy}</div><div class="kpi-sub">cargados hoy</div></div>
         <div class="kpi-card blue"><div class="kpi-label">T. RESOLUCIÓN</div><div class="kpi-value" style="font-size:22px">${tiempoPromedio}</div><div class="kpi-sub">días promedio</div></div>
       </div>
@@ -7298,8 +7295,8 @@ async function renderFarmacias(el) {
               <select class="form-select" id="farmacias-filtro-estado" onchange="FARMACIA_ESTADO_FILTRO=this.value;renderFarmacias(document.getElementById('main-content'))">
                 <option value="TODOS">Todos</option>
                 <option value="PENDIENTE">Pendiente</option>
-                <option value="EN_REVISION">En revisión</option>
                 <option value="RESUELTO">Resuelto</option>
+                <option value="NO_RESUELTO">No resuelto</option>
               </select>
             </div>
             <div class="form-group-inner">
