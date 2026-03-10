@@ -313,6 +313,7 @@ body::after {
 .role-solo_lectura { background: rgba(255,193,7,.15); color: var(--yellow); }
 .role-farm_operario { background: rgba(139,92,246,.15); color: var(--violet); }
 .role-farm_encargado { background: rgba(255,71,87,.15); color: var(--red); }
+.role-farm_solo_lectura { background: rgba(100,116,139,.15); color: #94a3b8; }
 
 .btn-logout {
   padding: 7px 14px;
@@ -724,6 +725,7 @@ body::after {
             <option value="solo_lectura">Solo lectura</option>
             <option value="farm_operario">Farm. Operario (solo carga avisos)</option>
             <option value="farm_encargado">Farm. Encargado (cambia estados)</option>
+            <option value="farm_solo_lectura">Farm. Solo lectura (solo visualiza)</option>
             <option value="admin">Admin</option>
           </select>
         </div>
@@ -939,7 +941,7 @@ function mostrarApp() {
   document.getElementById('top-username').textContent = `${SESSION.nombre} ${SESSION.apellido}`;
 
   const roleEl = document.getElementById('top-role');
-  const labels = { admin: 'ADMIN', operador: 'OPERADOR', solo_lectura: 'SOLO LECTURA', farm_operario: 'FARM. OPERARIO', farm_encargado: 'FARM. ENCARGADO' };
+  const labels = { admin: 'ADMIN', operador: 'OPERADOR', solo_lectura: 'SOLO LECTURA', farm_operario: 'FARM. OPERARIO', farm_encargado: 'FARM. ENCARGADO', farm_solo_lectura: 'FARM. SOLO LECTURA' };
   roleEl.textContent = labels[SESSION.rol] || SESSION.rol;
   roleEl.className = `user-role-top role-${SESSION.rol}`;
 
@@ -948,7 +950,7 @@ function mostrarApp() {
   }
 
   // Si es rol de farmacia, ir directo a farmacias
-  if (SESSION.rol === 'farm_operario' || SESSION.rol === 'farm_encargado') {
+  if (SESSION.rol === 'farm_operario' || SESSION.rol === 'farm_encargado' || SESSION.rol === 'farm_solo_lectura') {
     cargarNotificaciones();
     setInterval(cargarNotificaciones, 5 * 60 * 1000);
     const farmNav = document.querySelector('.nav-item[onclick*="farmacias"]');
@@ -970,7 +972,7 @@ function mostrarApp() {
 // ══════════════════════════════════════════════
 function navTo(page, el) {
   // Roles de farmacia solo pueden acceder al módulo de farmacias
-  const isFarmRole = SESSION?.rol === 'farm_operario' || SESSION?.rol === 'farm_encargado';
+  const isFarmRole = SESSION?.rol === 'farm_operario' || SESSION?.rol === 'farm_encargado' || SESSION?.rol === 'farm_solo_lectura';
   if (isFarmRole && page !== 'farmacias') return;
 
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -1820,6 +1822,7 @@ async function cargarTablaUsuarios() {
       solo_lectura: '<span class="tag tag-yellow">SOLO LECTURA</span>',
       farm_operario: '<span class="tag" style="background:rgba(139,92,246,.15);color:var(--violet)">FARM. OPERARIO</span>',
       farm_encargado: '<span class="tag" style="background:rgba(255,71,87,.15);color:var(--red)">FARM. ENCARGADO</span>',
+      farm_solo_lectura: '<span class="tag" style="background:rgba(100,116,139,.15);color:#94a3b8">FARM. SOLO LECTURA</span>',
     };
 
     wrap.innerHTML = `
@@ -6724,8 +6727,9 @@ function mostrarSplash(callback) {
 //  FARMACIAS — CONTROL URGENTE
 // ══════════════════════════════════════════════
 // ROLES:
-//   farm_operario  → solo puede cargar nuevos avisos
-//   farm_encargado → puede cargar avisos Y cambiar estados
+//   farm_operario      → solo puede cargar nuevos avisos
+//   farm_encargado     → puede cargar avisos Y cambiar estados
+//   farm_solo_lectura  → solo puede visualizar, sin acciones
 //   admin/operador → acceso total (sin eliminar)
 // ══════════════════════════════════════════════
 let FARMACIAS_DATA = [];
@@ -6887,8 +6891,8 @@ function ensureFarmaciaActual() {
 
 function abrirModalNuevoAvisoFarmacia() {
   cerrarModalRemove('modal-nuevo-aviso-farmacia');
-  // farm_encargado y farm_operario pueden cargar. solo_lectura no.
-  const canLoad = SESSION?.rol !== 'solo_lectura';
+  // farm_encargado y farm_operario pueden cargar. farm_solo_lectura y solo_lectura no.
+  const canLoad = !['solo_lectura','farm_solo_lectura'].includes(SESSION?.rol);
   if (!canLoad) { toast('⚠ No tenés permiso para cargar avisos', 'warn'); return; }
   if (!ensureFarmaciaActual()) return;
   const fecha = new Date().toISOString().slice(0, 10);
@@ -7122,9 +7126,9 @@ async function renderFarmacias(el) {
 
   // ── Permisos ──────────────────────────────
   const rol = SESSION?.rol;
-  const canLoad  = rol !== 'solo_lectura';
+  const canLoad  = !['solo_lectura','farm_solo_lectura'].includes(rol);
   const canState = ['admin','operador','farm_encargado'].includes(rol);
-  const isFarmOnly = rol === 'farm_operario' || rol === 'farm_encargado';
+  const isFarmOnly = ['farm_operario','farm_encargado','farm_solo_lectura'].includes(rol);
 
   // ── KPIs base ─────────────────────────────
   const pendientes   = all.filter(x => x.estado === 'PENDIENTE').length;
