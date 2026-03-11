@@ -7128,7 +7128,7 @@ async function renderFarmacias(el) {
   const rol = SESSION?.rol;
   const canLoad  = !['solo_lectura','farm_solo_lectura'].includes(rol);
   const canState = ['admin','operador','farm_encargado'].includes(rol);
-  const isFarmOnly = ['farm_operario','farm_encargado','farm_solo_lectura'].includes(rol);
+  const isFarmOnly = ['farm_operario','farm_solo_lectura'].includes(rol);
 
   // ── KPIs base ─────────────────────────────
   const pendientes   = all.filter(x => x.estado === 'PENDIENTE').length;
